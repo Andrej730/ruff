@@ -399,7 +399,7 @@ impl ConfigurationPaths {
             && path
                 .parent()
                 .is_some_and(|parent| project_root.starts_with(parent))
-            && matches!(path.file_name(), Some("ty.toml" | "pyproject.toml"))
+            && is_project_config_file(path)
     }
 
     fn may_contain_configuration(&self, directory: &SystemPath, project_root: &SystemPath) -> bool {
@@ -419,4 +419,22 @@ impl ConfigurationPaths {
 
 fn is_ignore_file(path: &SystemPath) -> bool {
     matches!(path.file_name(), Some(".gitignore" | ".ignore"))
+}
+fn is_project_config_file(path: &SystemPath) -> bool {
+    matches!(
+        path.file_name(),
+        Some("ty.toml" | "pyproject.toml" | "uv.toml")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::system::SystemPath;
+
+    use super::is_project_config_file;
+
+    #[test]
+    fn recognizes_uv_configuration() {
+        assert!(is_project_config_file(SystemPath::new("/project/uv.toml")));
+    }
 }

@@ -4641,7 +4641,6 @@ dependencies = [
  "insta",
  "insta-cmd",
  "jiff",
- "pep440_rs",
  "rayon",
  "regex",
  "ruff_db",
