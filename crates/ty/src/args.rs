@@ -90,6 +90,7 @@ pub(crate) struct CheckCommand {
     #[arg(
         long,
         env = EnvVars::TY_UV_METADATA,
+        hide = true,
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub(crate) uv_metadata: bool,
