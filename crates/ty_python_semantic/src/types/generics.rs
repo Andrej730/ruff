@@ -2122,6 +2122,11 @@ impl<'db> TypeVarInference<'db> {
     }
 }
 
+enum ConstraintSetInferenceError<'db> {
+    InvalidTypeVar(SpecializationError<'db>),
+    Unsatisfiable,
+}
+
 impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     pub(crate) fn new(
         db: &'db dyn Db,
@@ -2552,9 +2557,29 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     fn add_type_mappings_from_constraint_set(
         &mut self,
         set: ConstraintSet<'db, 'c>,
-    ) -> Result<(), ()> {
-        let solutions = match set.solutions(self.db, self.constraints, self.inferable) {
-            Solutions::Unsatisfiable => return Err(()),
+    ) -> Result<(), ConstraintSetInferenceError<'db>> {
+        let mut first_error = None;
+        let solutions = match set.solutions_with(
+            self.db,
+            self.constraints,
+            self.inferable,
+            |_variance, path_bound| {
+                let solution = PathBounds::default_solve(self.db, self.constraints, path_bound);
+                if solution.is_err() && first_error.is_none() {
+                    first_error = Self::specialization_error_from_failed_bounds(
+                        self.db,
+                        path_bound,
+                    );
+                }
+                solution
+            },
+        ) {
+            Solutions::Unsatisfiable => {
+                return Err(first_error.map_or(
+                    ConstraintSetInferenceError::Unsatisfiable,
+                    ConstraintSetInferenceError::InvalidTypeVar,
+                ));
+            }
             Solutions::Unconstrained => return Ok(()),
             Solutions::Constrained(solutions) => solutions,
         };
@@ -2579,6 +2604,30 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     fn infer_from_protocol_constraint_set(&mut self, when: ConstraintSet<'db, 'c>) {
         if self.add_type_mappings_from_constraint_set(when).is_ok() {
             self.pending.intersect(self.db, self.constraints, when);
+        }
+    }
+
+    fn specialization_error_from_failed_bounds(
+        db: &'db dyn Db,
+        path_bound: &PathBound<'db>,
+    ) -> Option<SpecializationError<'db>> {
+        let bound_typevar = path_bound.bound_typevar;
+        let argument = path_bound.lower?;
+        match bound_typevar.typevar(db).bound_or_constraints(db)? {
+            TypeVarBoundOrConstraints::UpperBound(_) => {
+                Some(SpecializationError::MismatchedBound {
+                    bound_typevar,
+                    argument,
+                })
+            }
+            TypeVarBoundOrConstraints::Constraints(_) if !path_bound.has_upper() => {
+                Some(SpecializationError::MismatchedConstraint {
+                    bound_typevar,
+                    argument,
+                })
+            }
+            // If both bounds are present, the upper bound might be what invalidated the path.
+            TypeVarBoundOrConstraints::Constraints(_) => None,
         }
     }
 
@@ -2682,7 +2731,8 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let when = actual_callable
                     .signatures(self.db)
                     .when_constraint_set_assignable_to(self.db, formal_signature, self.constraints);
-                self.add_type_mappings_from_constraint_set(when)?;
+                self.add_type_mappings_from_constraint_set(when)
+                    .map_err(|_| ())?;
                 self.pending.intersect(self.db, self.constraints, when);
             } else {
                 // An overloaded actual callable is compatible with the formal signature if at
@@ -3104,8 +3154,14 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             }
             (formal, actual @ Type::Intersection(_)) => {
                 let when = self.when_assignable_with_polarity(formal, actual, polarity);
-                if self.add_type_mappings_from_constraint_set(when).is_ok() {
-                    self.pending.intersect(self.db, self.constraints, when);
+                match self.add_type_mappings_from_constraint_set(when) {
+                    Ok(()) => {
+                        self.pending.intersect(self.db, self.constraints, when);
+                    }
+                    Err(ConstraintSetInferenceError::InvalidTypeVar(error)) => return Err(error),
+                    // Structural failures remain non-fatal while inference is split between the
+                    // constraint-set and legacy solvers.
+                    Err(ConstraintSetInferenceError::Unsatisfiable) => {}
                 }
                 return Ok(());
             }

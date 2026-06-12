@@ -749,17 +749,6 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
     ///
     /// For multi-path BDDs, the hook is called per-path. The caller is responsible for combining
     /// results across paths (typically via union).
-    pub(crate) fn solutions(
-        self,
-        db: &'db dyn Db,
-        builder: &'c ConstraintSetBuilder<'db>,
-        inferable: InferableTypeVars<'db>,
-    ) -> Solutions<'db> {
-        self.solutions_with(db, builder, inferable, |_variance, path_bound| {
-            PathBounds::default_solve(db, builder, path_bound)
-        })
-    }
-
     pub(crate) fn solutions_with(
         self,
         db: &'db dyn Db,
