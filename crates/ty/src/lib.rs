@@ -133,7 +133,7 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
         .to_path_buf();
 
     let system = OsSystem::new(&cwd);
-    let uv_workspace = if args.uv_metadata {
+    let stdin_uv_workspace = if args.uv_metadata {
         let mut metadata = Vec::new();
         std::io::stdin()
             .read_to_end(&mut metadata)
@@ -142,20 +142,8 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
             UvWorkspace::from_metadata(&cwd, &metadata, &system)
                 .context("Failed to use `uv workspace metadata` output from stdin")?,
         )
-    } else if explicit_project_path.is_none() {
-        UvWorkspace::discover(&cwd, &system)
     } else {
         None
-    };
-    let (stdin_uv_environment, stdin_uv_requires_python) = if args.uv_metadata {
-        uv_workspace.as_ref().map_or((None, None), |workspace| {
-            (
-                workspace.environment().map(SystemPath::to_path_buf),
-                workspace.requires_python().cloned(),
-            )
-        })
-    } else {
-        (None, None)
     };
 
     let mut check_paths: Vec<_> = args
@@ -183,13 +171,16 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
     let mut project_metadata = match &config_file {
         Some(config_file) => {
             ProjectMetadata::from_config_file(config_file.clone(), &project_path, &system)?
-                .with_uv_workspace(uv_workspace)
+                .with_uv_workspace(stdin_uv_workspace)
         }
         None if explicit_project_path.is_some() => {
             ProjectMetadata::discover_with_uv_workspace(&project_path, &system, None)?
-                .with_uv_workspace(uv_workspace)
+                .with_uv_workspace(stdin_uv_workspace)
         }
-        None => ProjectMetadata::discover_with_uv_workspace(&project_path, &system, uv_workspace)?,
+        None if stdin_uv_workspace.is_some() => {
+            ProjectMetadata::discover_with_uv_workspace(&project_path, &system, stdin_uv_workspace)?
+        }
+        None => ProjectMetadata::discover(&project_path, &system)?,
     };
 
     // Use uv to discover workspace settings without checking sibling workspace members by default.
