@@ -2123,7 +2123,7 @@ impl<'db> TypeVarInference<'db> {
 }
 
 enum ConstraintSetInferenceError<'db> {
-    InvalidTypeVar(SpecializationError<'db>),
+    TypeVarViolation(SpecializationError<'db>),
     Unsatisfiable,
 }
 
@@ -2558,26 +2558,24 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         &mut self,
         set: ConstraintSet<'db, 'c>,
     ) -> Result<(), ConstraintSetInferenceError<'db>> {
-        let mut first_error = None;
+        let mut first_typevar_error = None;
         let solutions = match set.solutions_with(
             self.db,
             self.constraints,
             self.inferable,
             |_variance, path_bound| {
                 let solution = PathBounds::default_solve(self.db, self.constraints, path_bound);
-                if solution.is_err() && first_error.is_none() {
-                    first_error = Self::specialization_error_from_failed_bounds(
-                        self.db,
-                        path_bound,
-                    );
+                if solution.is_err() && first_typevar_error.is_none() {
+                    first_typevar_error =
+                        Self::specialization_error_from_failed_bounds(self.db, path_bound);
                 }
                 solution
             },
         ) {
             Solutions::Unsatisfiable => {
-                return Err(first_error.map_or(
+                return Err(first_typevar_error.map_or(
                     ConstraintSetInferenceError::Unsatisfiable,
-                    ConstraintSetInferenceError::InvalidTypeVar,
+                    ConstraintSetInferenceError::TypeVarViolation,
                 ));
             }
             Solutions::Unconstrained => return Ok(()),
@@ -2784,24 +2782,18 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         actual: Type<'db>,
         polarity: TypeVarVariance,
     ) -> ConstraintSet<'db, 'c> {
+        let when_assignable = |source: Type<'db>, target: Type<'db>| {
+            self.constraints.load(
+                self.db,
+                &source.when_constraint_set_assignable_to_owned(self.db, target),
+            )
+        };
         match polarity {
-            TypeVarVariance::Covariant => self.constraints.load(
-                self.db,
-                &actual.when_constraint_set_assignable_to_owned(self.db, formal),
-            ),
-            TypeVarVariance::Contravariant => self.constraints.load(
-                self.db,
-                &formal.when_constraint_set_assignable_to_owned(self.db, actual),
-            ),
+            TypeVarVariance::Covariant => when_assignable(actual, formal),
+            TypeVarVariance::Contravariant => when_assignable(formal, actual),
             TypeVarVariance::Invariant => {
-                let covariant = self.constraints.load(
-                    self.db,
-                    &actual.when_constraint_set_assignable_to_owned(self.db, formal),
-                );
-                let contravariant = self.constraints.load(
-                    self.db,
-                    &formal.when_constraint_set_assignable_to_owned(self.db, actual),
-                );
+                let covariant = when_assignable(actual, formal);
+                let contravariant = when_assignable(formal, actual);
                 covariant.and(self.db, self.constraints, || contravariant)
             }
             TypeVarVariance::Bivariant => ConstraintSet::from_bool(self.constraints, true),
@@ -3158,7 +3150,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                     Ok(()) => {
                         self.pending.intersect(self.db, self.constraints, when);
                     }
-                    Err(ConstraintSetInferenceError::InvalidTypeVar(error)) => return Err(error),
+                    Err(ConstraintSetInferenceError::TypeVarViolation(error)) => return Err(error),
                     // Structural failures remain non-fatal while inference is split between the
                     // constraint-set and legacy solvers.
                     Err(ConstraintSetInferenceError::Unsatisfiable) => {}

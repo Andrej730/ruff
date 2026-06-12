@@ -740,12 +740,23 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn solutions(
+        self,
+        db: &'db dyn Db,
+        builder: &'c ConstraintSetBuilder<'db>,
+        inferable: InferableTypeVars<'db>,
+    ) -> Solutions<'db> {
+        self.solutions_with(db, builder, inferable, |_variance, path_bound| {
+            PathBounds::default_solve(db, builder, path_bound)
+        })
+    }
+
     /// Computes solutions for each BDD path, using a caller-provided hook to select solutions.
     ///
     /// The `choose` hook is called for each typevar on each BDD path with the typevar's variance
-    /// and explicit lower and upper bounds. It returns:
-    /// - `Some(ty)` to use `ty` as the solution for this typevar on this path
-    /// - `None` to fall back to the default solution selection logic
+    /// and explicit lower and upper bounds. `Ok(Some(ty))` uses `ty` as the solution, `Ok(None)`
+    /// leaves the typevar unsolved, and `Err(())` rejects the path.
     ///
     /// For multi-path BDDs, the hook is called per-path. The caller is responsible for combining
     /// results across paths (typically via union).
