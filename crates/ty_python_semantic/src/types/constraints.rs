@@ -740,18 +740,6 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn solutions(
-        self,
-        db: &'db dyn Db,
-        builder: &'c ConstraintSetBuilder<'db>,
-        inferable: InferableTypeVars<'db>,
-    ) -> Solutions<'db> {
-        self.solutions_with(db, builder, inferable, |_variance, path_bound| {
-            PathBounds::default_solve(db, builder, path_bound)
-        })
-    }
-
     /// Computes solutions for each BDD path, using a caller-provided hook to select solutions.
     ///
     /// The `choose` hook is called for each typevar on each BDD path with the typevar's variance
@@ -7409,7 +7397,9 @@ mod tests {
             )
         };
 
-        let solutions = set.solutions(&db, &builder, inferable);
+        let solutions = set.solutions_with(&db, &builder, inferable, |_variance, path_bound| {
+            PathBounds::default_solve(&db, &builder, path_bound)
+        });
         assert_eq!(
             solutions,
             Solutions::Constrained(vec![vec![TypeVarSolution {
