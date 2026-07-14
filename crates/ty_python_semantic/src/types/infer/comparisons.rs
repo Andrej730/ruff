@@ -167,14 +167,15 @@ pub(super) fn infer_binary_type_comparison<'db>(
         }
     };
 
-    let same_typevar = matches!(
-        (
-            left.resolve_type_alias(db),
-            right.resolve_type_alias(db)
-        ),
-        (Type::TypeVar(left), Type::TypeVar(right)) if left.is_same_typevar_as(db, right)
-    );
-    if !same_typevar && matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) {
+    if matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot)
+        && !matches!(
+            (
+                left.resolve_type_alias(db),
+                right.resolve_type_alias(db)
+            ),
+            (Type::TypeVar(left), Type::TypeVar(right)) if left.is_same_typevar_as(db, right)
+        )
+    {
         // `NewType` is an identity function at runtime, so distinct NewTypes can still contain the
         // same object:
         //
