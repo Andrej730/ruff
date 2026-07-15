@@ -16,7 +16,7 @@ use crate::types::constraints::{
 };
 use crate::types::infer::original_class_type;
 use crate::types::relation::{
-    DisjointnessChecker, HasRelationToVisitor, IsDisjointVisitor, TypeRelation,
+    DisjointnessChecker, GradualEvaluation, HasRelationToVisitor, IsDisjointVisitor, TypeRelation,
     TypeRelationChecker, TypeVarEvaluation,
 };
 use crate::types::signatures::{CallableSignature, Parameters, SignatureRelationVisitor};
@@ -32,10 +32,10 @@ use crate::types::visitor::{
 };
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarInstance, CallableType, CallableTypes,
-    ClassLiteral, FindLegacyTypeVarsVisitor, IntersectionType, KnownClass, KnownInstanceType,
-    MaterializationKind, SubclassOfInner, Type, TypeAliasType, TypeContext, TypeMapping,
-    TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, UnionAccumulator, UnionType,
-    binding_type, infer_definition_types, inferred_declaration,
+    ClassLiteral, DynamicType, FindLegacyTypeVarsVisitor, IntersectionType, KnownClass,
+    KnownInstanceType, MaterializationKind, SubclassOfInner, Type, TypeAliasType, TypeContext,
+    TypeMapping, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, UnionAccumulator,
+    UnionType, binding_type, infer_definition_types, inferred_declaration,
 };
 use crate::{Db, FxIndexMap, FxOrderMap, FxOrderSet};
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -1589,6 +1589,42 @@ impl<'db> Specialization<'db> {
 }
 
 impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
+    /// Materialize a gradual source to the target's outer structure, then compare that
+    /// materialization with the original target to expose constraints on nested type variables.
+    ///
+    /// For example, distributing `Any` across `tuple[T]` produces the comparison
+    /// `tuple[Any] <: tuple[T]`, which retains `Any <: T`. If the comparison produces no
+    /// type-variable constraints, its unconditional result is converted to the gradual sentinel:
+    /// the materialization requirement is satisfiable, but irrelevant to generic inference.
+    pub(super) fn distribute_gradual_constraints(
+        &self,
+        db: &'db dyn Db,
+        gradual: Type<'db>,
+        target: Type<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        debug_assert_eq!(self.relation, TypeRelation::Assignability);
+        debug_assert_eq!(self.typevar_evaluation, TypeVarEvaluation::Lazy);
+        debug_assert_eq!(self.gradual_evaluation, GradualEvaluation::Lazy);
+
+        let source = target.apply_type_mapping(
+            db,
+            &TypeMapping::ApplySpecialization(ApplySpecialization::Inferable(
+                InferableTypeVarSpecialization::new(self.inferable, gradual),
+            )),
+            TypeContext::default(),
+        );
+
+        // Reuse this checker so recursive structural relations share its cycle detector. Starting
+        // a new relation here would let a recursive protocol repeatedly compare the same
+        // specialized pair without observing the active comparison.
+        let constraints = self.check_type_pair(db, source, target);
+        if constraints.is_always_satisfied(db) {
+            self.gradual()
+        } else {
+            constraints
+        }
+    }
+
     pub(super) fn check_specialization_pair(
         &self,
         db: &'db dyn Db,
@@ -1915,6 +1951,28 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
     }
 }
 
+/// Replaces every type variable in an inference domain with the same type.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, get_size2::GetSize)]
+pub struct InferableTypeVarSpecialization<'db> {
+    inferable: InferableTypeVars<'db>,
+    replacement: Type<'db>,
+}
+
+impl<'db> InferableTypeVarSpecialization<'db> {
+    fn new(inferable: InferableTypeVars<'db>, replacement: Type<'db>) -> Self {
+        Self {
+            inferable,
+            replacement,
+        }
+    }
+
+    fn get(self, db: &'db dyn Db, bound_typevar: BoundTypeVarInstance<'db>) -> Option<Type<'db>> {
+        bound_typevar
+            .is_inferable(db, self.inferable)
+            .then_some(self.replacement)
+    }
+}
+
 /// A mapping between type variables and types.
 ///
 /// You will usually use [`Specialization`] instead of this type. This type is used when we need to
@@ -1931,6 +1989,8 @@ pub enum ApplySpecialization<'a, 'db> {
         skip: Option<usize>,
     },
     ReturnCallables(&'a FxIndexMap<BoundTypeVarInstance<'db>, BoundTypeVarInstance<'db>>),
+    /// Maps every type variable in the current inference domain to the same type.
+    Inferable(InferableTypeVarSpecialization<'db>),
     /// Maps a single typevar to a concrete type. Used by the constraint set's sequent map to
     /// substitute a typevar nested inside another constraint's bound.
     Single(BoundTypeVarInstance<'db>, Type<'db>),
@@ -1965,6 +2025,7 @@ impl<'db> ApplySpecialization<'_, 'db> {
             ApplySpecialization::ReturnCallables(replacements) => {
                 replacements.get(&bound_typevar).copied().map(Type::TypeVar)
             }
+            ApplySpecialization::Inferable(specialization) => specialization.get(db, bound_typevar),
             ApplySpecialization::Single(typevar, ty) => {
                 if bound_typevar.is_same_typevar_as(db, *typevar) {
                     Some(*ty)
@@ -2004,7 +2065,9 @@ impl<'db> ApplySpecialization<'_, 'db> {
                         .collect::<Vec<_>>(),
                 ),
             ),
-            ApplySpecialization::ReturnCallables(_) | ApplySpecialization::Single(_, _) => None,
+            ApplySpecialization::ReturnCallables(_)
+            | ApplySpecialization::Inferable(_)
+            | ApplySpecialization::Single(_, _) => None,
         }
     }
 }
@@ -2732,6 +2795,23 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             // This is necessary for solving generics like `def head[T](my_list: MyList[T]) -> T`.
             (Type::TypeAlias(alias), _) => {
                 return self.infer_map_impl(alias.value_type(self.db), actual, polarity, seen);
+            }
+
+            (formal, gradual @ Type::Dynamic(dynamic))
+                if dynamic != DynamicType::UnspecializedTypeVar =>
+            {
+                let when = gradual.has_relation_to_with_options(
+                    self.db,
+                    formal,
+                    self.constraints,
+                    self.inferable,
+                    TypeRelation::Assignability,
+                    TypeVarEvaluation::Lazy,
+                    GradualEvaluation::Lazy,
+                );
+                if self.add_type_mappings_from_constraint_set(when).is_ok() {
+                    self.pending.intersect(self.db, self.constraints, when);
+                }
             }
 
             (Type::TypeForm(formal_typeform), Type::TypeForm(actual_typeform)) => {

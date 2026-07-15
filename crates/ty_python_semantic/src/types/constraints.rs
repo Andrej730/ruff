@@ -44,6 +44,9 @@
 //! When `if_uncertain` is `ALWAYS_FALSE` everywhere, the TDD degenerates to a standard BDD, and
 //! all operations have zero overhead compared to the binary case.
 //!
+//! Relation checks can also produce `GRADUAL` for materialization constraints that do not affect
+//! inference, without collapsing to `ALWAYS_FALSE` or `ALWAYS_TRUE`.
+//!
 //! NOTE: This module is currently in a transitional state. We've added the BDD [`ConstraintSet`]
 //! representation, and updated all of our property checks to build up a constraint set and then
 //! check whether it is ever or always satisfiable, as appropriate. We are not yet inferring
@@ -373,6 +376,11 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
 
     fn always(builder: &'c ConstraintSetBuilder<'db>) -> Self {
         Self::from_node(builder, ALWAYS_TRUE)
+    }
+
+    /// Returns the sentinel for non-inferable gradual constraints.
+    pub(crate) fn gradual(builder: &'c ConstraintSetBuilder<'db>) -> Self {
+        Self::from_node(builder, GRADUAL)
     }
 
     pub(crate) fn from_bool(builder: &'c ConstraintSetBuilder<'db>, b: bool) -> Self {
@@ -2096,11 +2104,15 @@ const ALWAYS_TRUE: NodeId = NodeId(0xffff_ffff);
 /// A special ID that is used for an "always false" / "never visible" constraint.
 const ALWAYS_FALSE: NodeId = NodeId(0xffff_fffe);
 
-const SMALLEST_TERMINAL: NodeId = ALWAYS_FALSE;
+/// Constraints on a gradual type's materialization that do not affect inference.
+const GRADUAL: NodeId = NodeId(0xffff_fffd);
+
+const SMALLEST_TERMINAL: NodeId = GRADUAL;
 
 enum Node {
     AlwaysTrue,
     AlwaysFalse,
+    Gradual,
     Interior(InteriorNode),
 }
 
@@ -2273,6 +2285,7 @@ impl NodeId {
         match self {
             ALWAYS_TRUE => Node::AlwaysTrue,
             ALWAYS_FALSE => Node::AlwaysFalse,
+            GRADUAL => Node::Gradual,
             _ => Node::Interior(InteriorNode(self)),
         }
     }
@@ -2305,7 +2318,7 @@ impl NodeId {
             return self;
         }
         match self.node() {
-            Node::AlwaysTrue | Node::AlwaysFalse => self,
+            Node::AlwaysTrue | Node::AlwaysFalse | Node::Gradual => self,
             Node::Interior(_) => {
                 let interior = builder.interior_node_data(self);
                 NodeId::with_uncertain(
@@ -2341,6 +2354,7 @@ impl NodeId {
             match current {
                 Node::AlwaysTrue => return true,
                 Node::AlwaysFalse => return false,
+                Node::Gradual => return true,
                 Node::Interior(interior) => {
                     let data = builder.interior_node_data(interior.node());
 
@@ -2376,6 +2390,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => {}
             Node::AlwaysFalse => {}
+            Node::Gradual => {}
             Node::Interior(interior) => {
                 let mut path = interior.path_assignments(builder);
                 self.for_each_path_inner(db, builder, &mut f, &mut path);
@@ -2393,6 +2408,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => f(path),
             Node::AlwaysFalse => {}
+            Node::Gradual => f(path),
             Node::Interior(_) => {
                 let interior = builder.interior_node_data(self);
                 path.walk_edge(
@@ -2437,6 +2453,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => true,
             Node::AlwaysFalse => false,
+            Node::Gradual => false,
             Node::Interior(interior) => {
                 let mut path = interior.path_assignments(builder);
                 self.is_always_satisfied_inner(db, builder, &mut path)
@@ -2453,6 +2470,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => true,
             Node::AlwaysFalse => false,
+            Node::Gradual => false,
             Node::Interior(_) => {
                 // walk_edge will return None if this node's constraint (or anything we can derive
                 // from it) causes the if_true edge to become impossible. We want to ignore
@@ -2497,6 +2515,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => false,
             Node::AlwaysFalse => true,
+            Node::Gradual => false,
             Node::Interior(interior) => {
                 if let Some(result) = builder.storage.borrow().never_satisfied_cache.get(&self) {
                     return *result;
@@ -2523,6 +2542,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => false,
             Node::AlwaysFalse => true,
+            Node::Gradual => false,
             Node::Interior(_) => {
                 // walk_edge will return None if this node's constraint (or anything we can derive
                 // from it) causes the if_true edge to become impossible. We want to ignore
@@ -2596,6 +2616,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => ALWAYS_FALSE,
             Node::AlwaysFalse => ALWAYS_TRUE,
+            Node::Gradual => GRADUAL,
             Node::Interior(interior) => interior.negate(builder),
         }
     }
@@ -2627,6 +2648,8 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
+            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::Gradual) => self,
             (Node::AlwaysTrue, Node::AlwaysTrue) => ALWAYS_TRUE,
             (Node::AlwaysTrue, Node::Interior(_)) => {
                 let other_interior = builder.interior_node_data(other);
@@ -2793,6 +2816,8 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
+            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::Gradual) => self,
             (Node::AlwaysFalse, Node::AlwaysFalse) => ALWAYS_FALSE,
             (Node::AlwaysFalse, Node::Interior(_)) => {
                 let other_interior = builder.interior_node_data(other);
@@ -2881,6 +2906,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => then_node.or(builder, uncertain_node),
             Node::AlwaysFalse => else_node.or(builder, uncertain_node),
+            Node::Gradual => GRADUAL,
             Node::Interior(_) => {
                 let interior = builder.interior_node_data(self);
                 // Fast path for a bare positive constraint whose branches are still later in the
@@ -2964,6 +2990,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => return true,
             Node::AlwaysFalse => return false,
+            Node::Gradual => return true,
             Node::Interior(_) => {}
         }
 
@@ -3073,6 +3100,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => ALWAYS_TRUE,
             Node::AlwaysFalse => ALWAYS_FALSE,
+            Node::Gradual => GRADUAL,
             Node::Interior(interior) => interior.exists_inner(db, builder, bound_typevars, path),
         }
     }
@@ -3086,6 +3114,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => ALWAYS_TRUE,
             Node::AlwaysFalse => ALWAYS_FALSE,
+            Node::Gradual => GRADUAL,
             Node::Interior(interior) => interior.remove_noninferable(db, builder, inferable),
         }
     }
@@ -3100,6 +3129,7 @@ impl NodeId {
         match self.node() {
             Node::AlwaysTrue => ALWAYS_TRUE,
             Node::AlwaysFalse => ALWAYS_FALSE,
+            Node::Gradual => GRADUAL,
             Node::Interior(interior) => {
                 interior.abstract_one_inner(db, builder, should_remove, path)
             }
@@ -3137,7 +3167,7 @@ impl NodeId {
         assignment: ConstraintAssignment,
     ) -> (Self, bool) {
         match self.node() {
-            Node::AlwaysTrue | Node::AlwaysFalse => (self, false),
+            Node::AlwaysTrue | Node::AlwaysFalse | Node::Gradual => (self, false),
             Node::Interior(interior) => interior.restrict_one(db, builder, assignment),
         }
     }
@@ -3321,7 +3351,7 @@ impl NodeId {
         builder: &ConstraintSetBuilder<'db>,
     ) -> Self {
         match self.node() {
-            Node::AlwaysTrue | Node::AlwaysFalse => self,
+            Node::AlwaysTrue | Node::AlwaysFalse | Node::Gradual => self,
             Node::Interior(interior) => interior.simplify(db, builder),
         }
     }
@@ -3338,7 +3368,9 @@ impl NodeId {
             fn visit_node(&mut self, builder: &ConstraintSetBuilder<'_>, node: NodeId) {
                 match node.node() {
                     Node::AlwaysFalse => {}
-                    Node::AlwaysTrue => self.clauses.push(self.current_clause.clone()),
+                    Node::AlwaysTrue | Node::Gradual => {
+                        self.clauses.push(self.current_clause.clone());
+                    }
                     Node::Interior(_) => {
                         let interior = builder.interior_node_data(node);
                         self.current_clause.push(interior.constraint.when_true());
@@ -3381,6 +3413,7 @@ impl NodeId {
                 match self.node.node() {
                     Node::AlwaysTrue => f.write_str("always"),
                     Node::AlwaysFalse => f.write_str("never"),
+                    Node::Gradual => f.write_str("gradual"),
                     Node::Interior(_) => {
                         let mut clauses = self.node.satisfied_clauses(self.builder);
                         clauses.simplify(self.db, self.builder);
@@ -3440,6 +3473,7 @@ impl NodeId {
             match node.node() {
                 Node::AlwaysTrue => write!(f, "always"),
                 Node::AlwaysFalse => write!(f, "never"),
+                Node::Gradual => write!(f, "gradual"),
                 Node::Interior(_) => {
                     let (index, is_new) = seen.borrow_mut().insert_full(node);
                     if !is_new {
@@ -3512,6 +3546,7 @@ impl Debug for NodeId {
             // ScopedReachabilityConstraintId("AlwaysTrue").
             Node::AlwaysTrue => f.field(&format_args!("AlwaysTrue")),
             Node::AlwaysFalse => f.field(&format_args!("AlwaysFalse")),
+            Node::Gradual => f.field(&format_args!("Gradual")),
             Node::Interior(_) => f.field(&self.0),
         };
         f.finish()
@@ -3733,6 +3768,7 @@ impl<'db> PathBounds<'db> {
         match node.node() {
             Node::AlwaysTrue => return PathBounds::Unconstrained,
             Node::AlwaysFalse => return PathBounds::Unsatisfiable,
+            Node::Gradual => return PathBounds::Unconstrained,
             Node::Interior(_) => {}
         }
 
@@ -3808,6 +3844,7 @@ impl<'db> PathBounds<'db> {
         match node.node() {
             Node::AlwaysTrue => return Some(PathBounds::Unconstrained),
             Node::AlwaysFalse => return Some(PathBounds::Unsatisfiable),
+            Node::Gradual => return Some(PathBounds::Unconstrained),
             Node::Interior(_) => {}
         }
 
@@ -3817,6 +3854,7 @@ impl<'db> PathBounds<'db> {
             match current.node() {
                 Node::AlwaysTrue => break,
                 Node::AlwaysFalse => return None,
+                Node::Gradual => break,
                 Node::Interior(_) => {
                     let interior = builder.interior_node_data(current);
                     if interior.if_uncertain != ALWAYS_FALSE || interior.if_false != ALWAYS_FALSE {
@@ -5589,7 +5627,7 @@ impl SequentMap {
         //      `(Invariant[S] ≤ T ≤ Invariant[τ]) → (S = τ)`
         //      `(Invariant[τ] ≤ T ≤ Invariant[U]) → (τ = U)`
         //
-        // and whenever the bounds are assignable, even if they don't mention exactly the same
+        // and whenever the bounds are subtypes, even if they don't mention exactly the same
         // types:
         //
         //   class Sub(Covariant[int]): ...
@@ -5597,12 +5635,12 @@ impl SequentMap {
         //   7. `(Covariant[S] ≤ T ≤ Sub) → (S ≤ int)`
         //      `(Sub ≤ T ≤ Covariant[U]) → (int ≤ U)`
         //
-        // To handle all of these cases, we perform a constraint set assignability check to see
+        // To handle all of these cases, we perform a constraint set subtyping check to see
         // when `L ≤ U`. This gives us a constraint set, which should be the rhs of the sequent
         // implication. (That is, this check directly encodes `(L ≤ T ≤ U) → (L ≤ U)` as an
         // implication.)
 
-        // Skip trivial cases where the assignability check won't produce useful results.
+        // Skip bounds that cannot produce useful constraints.
         if !constraint_data.bounds.has_lower()
             || !constraint_data.bounds.has_upper()
             || lower.is_never()
@@ -5611,16 +5649,15 @@ impl SequentMap {
             return;
         }
 
-        let when = builder.load(
-            db,
-            &lower.when_constraint_set_assignable_to_owned(db, upper),
-        );
+        let when = builder.load(db, &lower.when_constraint_set_subtype_of_owned(db, upper));
 
-        // If L is _never_ assignable to U, this constraint would violate transitivity, and should
-        // never have been added.
-        debug_assert!(!when.is_never_satisfied(db));
+        // Assignable bounds are not necessarily subtypes, so they may not imply any transitive
+        // constraints.
+        if when.is_never_satisfied(db) {
+            return;
+        }
 
-        // Fast path: If L is trivially always assignable to U, there are no derived constraints
+        // Fast path: If L is trivially always a subtype of U, there are no derived constraints
         // that we can infer. This would be handled correctly by the logic below, but this is a
         // useful early return. Since we only use this check as an early return happy path, we can
         // accept false negatives. That lets us use the simpler and cheaper check against
@@ -5668,7 +5705,7 @@ impl SequentMap {
 
         loop {
             match node.node() {
-                Node::AlwaysTrue | Node::AlwaysFalse => break,
+                Node::AlwaysTrue | Node::AlwaysFalse | Node::Gradual => break,
                 Node::Interior(interior) => {
                     let interior = builder.interior_node_data(interior.node());
                     if interior.if_true != ALWAYS_FALSE {
@@ -7309,6 +7346,28 @@ mod tests {
     }
 
     #[test]
+    fn gradual_sentinel_preserves_informative_constraints() {
+        let db = setup_db();
+        let t = create_typevar(&db, "T");
+        let builder = ConstraintSetBuilder::new();
+        let gradual = ConstraintSet::gradual(&builder);
+        let t_int = create_constraint(&db, &builder, t, KnownClass::Int);
+
+        assert!(!gradual.is_always_satisfied(&db));
+        assert!(!gradual.is_never_satisfied(&db));
+        assert_eq!(
+            gradual.solutions(&db, &builder, InferableTypeVars::None),
+            Solutions::Unconstrained,
+        );
+
+        // Gradual constraints are identities when combined with informative constraints.
+        assert_eq!(gradual.or(&db, &builder, || t_int).node, t_int.node);
+        assert_eq!(gradual.and(&db, &builder, || t_int).node, t_int.node);
+        assert_eq!(t_int.or(&db, &builder, || gradual).node, t_int.node);
+        assert_eq!(t_int.and(&db, &builder, || gradual).node, t_int.node);
+    }
+
+    #[test]
     fn type_mapping_updates_constraint_bounds() {
         // (list[U] ≤ T ≤ list[U])[U ↦ int] = (list[int] ≤ T ≤ list[int])
         let db = setup_db();
@@ -7578,6 +7637,30 @@ mod tests {
             Some(&false)
         );
         assert_eq!(storage.constraint_implication_cache.len(), 2);
+    }
+
+    #[test]
+    fn gradual_bounds_are_top_materialized_in_sequents() {
+        let db = setup_db();
+        let t = create_typevar(&db, "T");
+        let u = create_typevar(&db, "U");
+        let builder = ConstraintSetBuilder::new();
+        let constraint = ConstraintId::new_with_bounds(
+            &db,
+            &builder,
+            t,
+            Some(Type::unknown()),
+            Some(Type::TypeVar(u)),
+        );
+        let implied = ConstraintId::new_with_bounds(&db, &builder, u, Some(Type::object()), None);
+
+        let mut expected = SequentMap::default();
+        expected.add_single_implication(&db, &builder, constraint, implied);
+
+        assert_eq!(
+            &*SequentMap::for_constraint(&db, &builder, constraint),
+            &expected
+        );
     }
 
     #[test]

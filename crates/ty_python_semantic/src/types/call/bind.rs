@@ -5356,11 +5356,13 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                     continue;
                 }
 
-                let argument_type = argument_types.get_for_declared_type(declared_type);
-                let specialization_result = builder.infer(
-                    declared_type,
-                    matched_parameter.argument_type.unwrap_or(argument_type),
-                );
+                let Some(argument_type) = matched_parameter
+                    .argument_type
+                    .or_else(|| argument_types.try_get_for_declared_type(declared_type))
+                else {
+                    continue;
+                };
+                let specialization_result = builder.infer(declared_type, argument_type);
 
                 if let Err(error) = specialization_result {
                     specialization_errors.push(BindingError::SpecializationError {
