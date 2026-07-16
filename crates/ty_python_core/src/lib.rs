@@ -1075,7 +1075,6 @@ mod tests {
     };
     use ruff_python_ast as ast;
     use ruff_text_size::{Ranged, TextRange};
-    use ty_module_resolver::Db as _;
 
     use super::*;
 
@@ -1085,6 +1084,7 @@ mod tests {
         definition::{
             DefinitionKind, LambdaParameterDefinitionNodeKind, ParameterDefinitionNodeKind,
         },
+        program::Program,
     };
 
     impl UseDefMap<'_> {
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     fn python_file(db: &TestDb, file: File) -> PythonFile<'_> {
-        PythonFile::new(db, file, db.python_version())
+        PythonFile::new(db, file, Program::get(db).python_version(db))
     }
 
     fn names(table: &PlaceTable) -> Vec<String> {
@@ -1866,7 +1866,10 @@ class C[T]:
                 .into_iter()
                 .map(|(scope_id, _)| {
                     scope_id
-                        .to_scope_id(db, PythonFile::new(db, file, db.python_version()))
+                        .to_scope_id(
+                            db,
+                            PythonFile::new(db, file, Program::get(db).python_version(db)),
+                        )
                         .name(db, module)
                 })
                 .collect()

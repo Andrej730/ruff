@@ -856,12 +856,12 @@ impl HasType for ast::ExceptHandlerExceptHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::Db as _;
     use crate::db::tests::TestDbBuilder;
     use crate::{HasType, SemanticModel};
     use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
-    use ty_module_resolver::Db as _;
 
     #[test]
     fn function_type() -> anyhow::Result<()> {

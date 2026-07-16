@@ -70,7 +70,7 @@ pub fn type_hierarchy_subtypes(
         return vec![];
     };
 
-    ty_module_resolver::all_modules(db)
+    ty_module_resolver::all_modules(db, file.python_version(db))
         .into_par_iter()
         .map_with_db(db, |db, module| {
             ty_python_semantic::type_hierarchy_subtypes(db, ty, &[module])

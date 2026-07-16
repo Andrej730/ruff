@@ -1602,7 +1602,6 @@ mod tests {
     use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::system::DbWithWritableSystem as _;
-    use ty_module_resolver::Db as _;
     use ty_python_core::narrowing_constraints::InteriorNode;
     use ty_python_core::predicate::Predicates;
     use ty_python_core::semantic_index;

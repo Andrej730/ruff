@@ -8,7 +8,6 @@ use ruff_db::diagnostic::{Diagnostic, DiagnosticId};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::DbWithWritableSystem as _;
 use ruff_db::testing::{assert_function_query_was_not_run, assert_function_query_was_run};
-use ty_module_resolver::Db as _;
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::FileScopeId;
 use ty_python_core::{global_scope, place_table, semantic_index, use_def_map};

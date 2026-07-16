@@ -93,6 +93,7 @@ fn merge_overlapping_ranges(mut ranges: Vec<UnreachableRange>) -> Box<[Unreachab
 #[cfg(test)]
 mod tests {
     use super::{UnreachableKind, unreachable_ranges};
+    use crate::Db as _;
     use crate::db::tests::TestDbBuilder;
     use insta::assert_snapshot;
     use ruff_db::PythonFile;
@@ -102,7 +103,6 @@ mod tests {
     use ruff_db::files::{FileRange, system_path_to_file};
     use ruff_python_ast::PythonVersion;
     use ruff_python_trivia::textwrap::dedent;
-    use ty_module_resolver::Db as _;
     use ty_python_core::platform::PythonPlatform;
 
     const TEST_PATH: &str = "/src/main.py";

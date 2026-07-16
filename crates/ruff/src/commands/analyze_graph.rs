@@ -100,12 +100,6 @@ pub(crate) fn analyze_graph(
     let db = ModuleDb::from_src_roots(
         system,
         src_roots.into_iter().collect(),
-        pyproject_config
-            .settings
-            .analyze
-            .target_version
-            .as_tuple()
-            .into(),
         args.python
             .and_then(|python| SystemPathBuf::from_path_buf(python).ok()),
     )?;

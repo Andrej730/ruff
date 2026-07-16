@@ -431,7 +431,7 @@ mod tests {
     use crate::strategy::FallibleStrategy;
     use crate::testing::{FileSpec, MockedTypeshed, TestCase, TestCaseBuilder};
 
-    fn list_modules(db: &dyn Db) -> &[Module<'_>] {
+    fn list_modules(db: &TestDb) -> &[Module<'_>] {
         super::list_modules(db, db.python_version())
     }
 
@@ -486,18 +486,18 @@ mod tests {
         }
     }
 
-    fn sorted_list(db: &dyn Db) -> Vec<Module<'_>> {
+    fn sorted_list(db: &TestDb) -> Vec<Module<'_>> {
         let mut modules = list_modules(db).to_vec();
         modules.sort_by(|m1, m2| m1.name(db).cmp(m2.name(db)));
         modules
     }
 
-    fn list_snapshot(db: &dyn Db) -> Vec<ModuleDebugSnapshot<'_>> {
+    fn list_snapshot(db: &TestDb) -> Vec<ModuleDebugSnapshot<'_>> {
         list_snapshot_filter(db, |_| true)
     }
 
     fn list_snapshot_filter<'db>(
-        db: &'db dyn Db,
+        db: &'db TestDb,
         predicate: impl Fn(&Module<'db>) -> bool,
     ) -> Vec<ModuleDebugSnapshot<'db>> {
         sorted_list(db)

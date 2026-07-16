@@ -2240,12 +2240,12 @@ pub fn constructor_signature(model: &SemanticModel, call_expr: &ast::ExprCall) -
 #[cfg(test)]
 mod tests {
     use super::{CallArgumentForm, call_argument_forms};
+    use crate::Db as _;
     use crate::SemanticModel;
     use crate::db::tests::TestDbBuilder;
     use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
-    use ty_module_resolver::Db as _;
 
     #[test]
     fn keyword_call_argument_forms_follow_source_order() -> anyhow::Result<()> {
