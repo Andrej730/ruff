@@ -93,7 +93,7 @@ fn expected_types_are_collected_only_for_open_files() -> anyhow::Result<()> {
             db.open_file(file);
         }
 
-        let module = parsed_module(&db, file).load(&db);
+        let module = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
         let assignment = module.syntax().body[1]
             .as_ann_assign_stmt()
             .expect("annotated assignment");

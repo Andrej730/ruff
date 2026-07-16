@@ -134,8 +134,9 @@ pub(crate) fn infer_definition_types<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
-    let file = definition.file(db);
-    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let python_file = definition.python_file(db);
+    let file = python_file.file(db);
+    let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_definition_types",
         range = ?definition.kind(db).target_range(&module),
@@ -145,8 +146,14 @@ pub(crate) fn infer_definition_types<'db>(
 
     let index = semantic_index(db, file);
 
-    TypeInferenceBuilder::new(db, InferenceRegion::Definition(definition), index, &module)
-        .finish_definition(definition)
+    TypeInferenceBuilder::new(
+        db,
+        InferenceRegion::Definition(definition),
+        python_file,
+        index,
+        &module,
+    )
+    .finish_definition(definition)
 }
 
 /// Returns `true` if the definition refers to a dictionary-key binding that should be discarded.
@@ -184,13 +191,15 @@ pub(crate) fn function_known_decorators<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
 ) -> FunctionDecoratorInference<'db> {
-    let file = definition.file(db);
-    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let python_file = definition.python_file(db);
+    let file = python_file.file(db);
+    let module = parsed_module(db, python_file).load(db);
     let index = semantic_index(db, file);
 
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::FunctionDecorators(definition),
+        python_file,
         index,
         &module,
     )
@@ -269,8 +278,9 @@ pub(crate) fn infer_deferred_types<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
-    let file = definition.file(db);
-    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let python_file = definition.python_file(db);
+    let file = python_file.file(db);
+    let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_deferred_types",
         definition = ?definition.as_id(),
@@ -281,8 +291,14 @@ pub(crate) fn infer_deferred_types<'db>(
 
     let index = semantic_index(db, file);
 
-    TypeInferenceBuilder::new(db, InferenceRegion::Deferred(definition), index, &module)
-        .finish_definition(definition)
+    TypeInferenceBuilder::new(
+        db,
+        InferenceRegion::Deferred(definition),
+        python_file,
+        index,
+        &module,
+    )
+    .finish_definition(definition)
 }
 
 /// Infer all types for a [`ScopeId`], including all definitions and expressions in that scope.
@@ -340,16 +356,24 @@ pub(crate) fn infer_scope_types_impl<'db>(
     input: InferScope<'db>,
 ) -> ScopeInference<'db> {
     let (scope, tcx) = input.into_inner(db);
-    let file = scope.file(db);
+    let python_file = scope.python_file(db);
+    let file = python_file.file(db);
     let _span = tracing::trace_span!("infer_scope_types", scope=?scope.as_id(), ?file).entered();
 
-    let module = parsed_module(db, scope.python_file(db)).load(db);
+    let module = parsed_module(db, python_file).load(db);
 
     // Using the index here is fine because the code below depends on the AST anyway.
     // The isolation of the query is by the return inferred types.
     let index = semantic_index(db, file);
 
-    TypeInferenceBuilder::new(db, InferenceRegion::Scope(scope, tcx), index, &module).finish_scope()
+    TypeInferenceBuilder::new(
+        db,
+        InferenceRegion::Scope(scope, tcx),
+        python_file,
+        index,
+        &module,
+    )
+    .finish_scope()
 }
 
 /// Infer all types for an [`Expression`] (including sub-expressions).
@@ -378,8 +402,9 @@ pub(super) fn infer_expression_types_impl<'db>(
 ) -> ExpressionInference<'db> {
     let (expression, tcx) = input.into_inner(db);
 
-    let file = expression.file(db);
-    let module = parsed_module(db, expression.python_file(db)).load(db);
+    let python_file = expression.python_file(db);
+    let file = python_file.file(db);
+    let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_expression_types",
         expression = ?expression.as_id(),
@@ -393,6 +418,7 @@ pub(super) fn infer_expression_types_impl<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Expression(expression, tcx),
+        python_file,
         index,
         &module,
     )
@@ -503,8 +529,14 @@ fn infer_statement_types_impl<'db>(
 
     let index = semantic_index(db, file);
 
-    TypeInferenceBuilder::new(db, InferenceRegion::Statement(statement), index, &module)
-        .finish_statement()
+    TypeInferenceBuilder::new(
+        db,
+        InferenceRegion::Statement(statement),
+        python_file,
+        index,
+        &module,
+    )
+    .finish_statement()
 }
 
 /// An `Expression` with an optional `TypeContext`.
@@ -678,7 +710,7 @@ pub(super) fn infer_unpack_types<'db>(db: &'db dyn Db, unpack: Unpack<'db>) -> U
     )
     .entered();
 
-    let mut unpacker = Unpacker::new(db, unpack.target_scope(db), &module);
+    let mut unpacker = Unpacker::new(db, unpack.target_scope(db), python_file, &module);
     unpacker.unpack(unpack.target(db, &module), unpack.value(db));
     unpacker.finish()
 }
