@@ -260,6 +260,36 @@ def outer[S](callback: Any, value: S):
     reveal_type(inner(callback, value))  # revealed: tuple[S@outer, S@outer]
 ```
 
+## Partially gradual sibling type context
+
+When precise and gradual arguments contribute to the same invariant type parameters, inline literals
+should be inferred using the final specialization. Existing containers should keep their original
+types:
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from ty_extensions import Unknown
+
+def merge[K, V](*maps: dict[K, V]) -> tuple[K, V]:
+    raise NotImplementedError
+
+def _(dynamic: Unknown):
+    # TODO: Inline literals should be contextually inferred against the final specialization.
+    # error: [invalid-argument-type]
+    # error: [invalid-argument-type]
+    reveal_type(merge({"a": 1}, {2: "b"}, dynamic))  # revealed: tuple[str | int | Unknown, int | str | Unknown]
+
+    narrow = {"a": 1}
+    # TODO: Only `narrow` should produce an error; the second argument is an inline literal.
+    # error: [invalid-argument-type]
+    # error: [invalid-argument-type]
+    merge(narrow, {2: "b"}, dynamic)
+```
+
 ## Decorated
 
 ```py

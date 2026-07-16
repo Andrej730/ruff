@@ -2125,6 +2125,50 @@ reveal_type(x)  # revealed: int | str
 f([{"y": 1}], int_or_str())
 ```
 
+Overload candidates should be solved independently. Currently, gradual inference for a rejected
+candidate can affect a later candidate, making the result depend on declaration order:
+
+```py
+from collections.abc import Callable, Iterable
+from typing import Generic, Self, TypeVar, overload
+
+V = TypeVar("V", covariant=True)
+
+class Item(Generic[V]):
+    pass
+
+@overload
+def ordered[T](values: Iterable[T], *, key: None = None) -> list[T]: ...
+@overload
+def ordered[T](values: Iterable[T], *, key: Callable[[T], int]) -> list[T]: ...
+def ordered(values: Iterable[object], *, key: object = None) -> list[object]:
+    return []
+
+@overload
+def ordered_reversed[T](values: Iterable[T], *, key: Callable[[T], int]) -> list[T]: ...
+@overload
+def ordered_reversed[T](values: Iterable[T], *, key: None = None) -> list[T]: ...
+def ordered_reversed(values: Iterable[object], *, key: object = None) -> list[object]:
+    return []
+
+class View:
+    def __init__(self) -> None:
+        self.children: list[Item[Self]] = []
+
+    def result(self) -> list[Item[Self]]:
+        # error: [missing-type-argument]
+        def key(item: Item) -> int:
+            return 0
+
+        # TODO: This should match the call to `ordered_reversed` below.
+        # error: [no-matching-overload]
+        result = ordered(self.children, key=key)
+
+        reversed_result = ordered_reversed(self.children, key=key)
+        reveal_type(reversed_result)  # revealed: list[Item[Self@result]]
+        return result
+```
+
 An expected return type can specialize a generic overload and provide context for its arguments.
 Overload filtering should preserve that context:
 

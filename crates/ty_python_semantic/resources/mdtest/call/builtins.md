@@ -398,6 +398,35 @@ def _(xs: Unknown):
     reveal_type("".join(map("{}".format, xs)))  # revealed: str
 ```
 
+Graduality should also flow through the input and output type variable of a generic callback.
+Currently, the callback is solved to its bound before the outer `map` call incorporates the
+iterable's gradual element type:
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from collections.abc import Iterable
+from typing import Any, Protocol
+
+class Comparable(Protocol):
+    def __lt__(self, other: Any, /) -> bool: ...
+
+def minimum[C: Comparable](values: Iterable[C]) -> C:
+    raise NotImplementedError
+
+def _(values: list[tuple[Any, ...]]) -> None:
+    # TODO: both results should be `map[Any]`.
+    reveal_type(map(min, values))  # revealed: map[object]
+    reveal_type(map(minimum, values))  # revealed: map[object]
+
+    # TODO: both assignments should be accepted.
+    builtin_result: tuple[int, ...] = tuple(map(min, values))  # error: [invalid-assignment]
+    custom_result: tuple[int, ...] = tuple(map(minimum, values))  # error: [invalid-assignment]
+```
+
 ## Generic builtin call context preserves gradual types
 
 ```py
