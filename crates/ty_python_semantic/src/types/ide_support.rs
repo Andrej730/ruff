@@ -1720,7 +1720,7 @@ mod resolve_definition {
         // into the interpreter. In which case, all we have are stubs.
         // `resolve_real_module` will always return `None` for this case, but
         // it will emit false positive logs. And this saves us some work.
-        if is_builtin_module(db.python_version().minor, stub_module.name(db)) {
+        if is_builtin_module(stub_module.python_version(db)?.minor, stub_module.name(db)) {
             return None;
         }
         let real_module =

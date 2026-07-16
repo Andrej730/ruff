@@ -927,7 +927,12 @@ mod tests {
         );
 
         let events = db.take_salsa_events();
-        assert_function_query_was_not_run(&db, check_types, file, &events);
+        assert_function_query_was_not_run(
+            &db,
+            check_types,
+            PythonFile::new(&db, file, db.python_version()),
+            &events,
+        );
 
         // The user now creates a new file with an empty text. The source text
         // content returned by `source_text` remains unchanged, but the diagnostics should get updated.

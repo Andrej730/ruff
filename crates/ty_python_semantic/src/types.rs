@@ -13,6 +13,7 @@ use bitflags::bitflags;
 use call::{CallDunderError, CallError, CallErrorKind};
 use context::InferContext;
 use ruff_db::Instant;
+use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -173,13 +174,14 @@ mod definition;
 mod property_tests;
 mod subscript;
 
-pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
-    let _span = tracing::trace_span!("check_types", ?file).entered();
-    tracing::debug!("Checking file '{path}'", path = file.path(db));
+pub fn check_types(db: &dyn Db, file: PythonFile<'_>) -> Vec<Diagnostic> {
+    let source_file = file.file(db);
+    let _span = tracing::trace_span!("check_types", ?source_file).entered();
+    tracing::debug!("Checking file '{path}'", path = source_file.path(db));
 
     let start = Instant::now();
 
-    let index = semantic_index(db, file);
+    let index = semantic_index(db, source_file);
     let mut diagnostics = TypeCheckDiagnostics::default();
 
     for scope_id in index.scope_ids() {
@@ -200,7 +202,7 @@ pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
         index
             .semantic_syntax_errors()
             .iter()
-            .map(|error| Diagnostic::invalid_syntax(file, error, error)),
+            .map(|error| Diagnostic::invalid_syntax(source_file, error, error)),
     );
 
     let diagnostics = check_suppressions(db, file, diagnostics);
@@ -209,7 +211,7 @@ pub fn check_types(db: &dyn Db, file: File) -> Vec<Diagnostic> {
     if elapsed >= Duration::from_millis(100) {
         tracing::info!(
             "Checking file `{path}` took more than 100ms ({elapsed:?})",
-            path = file.path(db)
+            path = source_file.path(db)
         );
     }
 

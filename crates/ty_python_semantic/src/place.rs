@@ -1978,7 +1978,7 @@ fn is_reexported(db: &dyn Db, definition: Definition<'_>) -> bool {
     // At this point, the definition should either be an `import` or `from ... import` statement.
     // This is because the default value of `is_reexported` is `true` for any other kind of
     // definition.
-    let Some(all_names) = dunder_all_names(db, definition.file(db)) else {
+    let Some(all_names) = dunder_all_names(db, definition.python_file(db)) else {
         return false;
     };
     let table = place_table(db, definition.scope(db));

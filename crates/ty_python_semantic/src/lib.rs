@@ -210,7 +210,7 @@ pub fn check_file(db: &dyn Db, file: PythonFile<'_>) -> Result<Box<[Diagnostic]>
         error
     }));
 
-    diagnostics.extend(check_types(db, source_file));
+    diagnostics.extend(check_types(db, file));
 
     diagnostics.sort_unstable_by(|a, b| a.rendering_sort_key(db).cmp(&b.rendering_sort_key(db)));
 

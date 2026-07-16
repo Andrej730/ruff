@@ -1,5 +1,6 @@
 use compact_str::CompactString;
 use rayon::prelude::*;
+use ruff_db::PythonFile;
 use ruff_db::files::File;
 use ty_module_resolver::{Module, ModuleName, all_modules, resolve_real_shadowable_module};
 use ty_project::{Db, parallel::ParallelIteratorExt};
@@ -69,7 +70,8 @@ pub fn all_symbols<'db>(
             if query.is_match_symbol_name(module.name(db)) {
                 symbols.push(AllSymbolInfo::from_module(db, module, file));
             }
-            for (_, symbol) in symbols_for_file_global_only(db, file).search(query) {
+            let python_file = PythonFile::new(db, file, db.python_version());
+            for (_, symbol) in symbols_for_file_global_only(db, python_file).search(query) {
                 // Test functions (starting with `test_`) in third-party
                 // packages are almost never useful to import.
                 if is_non_first_party && symbol.name.starts_with("test_") {

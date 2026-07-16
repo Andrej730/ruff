@@ -208,6 +208,7 @@ use crate::{
         singleton_pattern_type,
     },
 };
+use ruff_db::PythonFile;
 use ruff_index::{Idx, IndexSlice};
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -1350,7 +1351,12 @@ fn analyze_single(db: &dyn Db, predicate: &Predicate) -> Truthiness {
             let symbol = place_table.symbol(star_import.symbol_id(db));
             let referenced_file = star_import.referenced_file(db);
 
-            let requires_explicit_reexport = match dunder_all_names(db, referenced_file) {
+            let python_file = PythonFile::new(
+                db,
+                referenced_file,
+                star_import.scope(db).python_file(db).python_version(db),
+            );
+            let requires_explicit_reexport = match dunder_all_names(db, python_file) {
                 Some(all_names) => {
                     if all_names.contains(symbol.name()) {
                         Some(RequiresExplicitReExport::No)

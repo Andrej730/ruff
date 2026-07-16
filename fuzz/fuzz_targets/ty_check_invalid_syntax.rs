@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use libfuzzer_sys::{Corpus, fuzz_target};
 
 use ruff_db::Db as SourceDb;
+use ruff_db::PythonFile;
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::system::{
@@ -181,7 +182,7 @@ fn do_fuzz(case: &[u8]) -> Corpus {
     for path in &["/src/a.py", "/src/a.pyi"] {
         db.write_file(path, code).unwrap();
         let file = system_path_to_file(&*db, path).unwrap();
-        check_types(&*db, file);
+        check_types(&*db, PythonFile::new(&*db, file, db.python_version()));
         db.memory_file_system().remove_file(path).unwrap();
         file.sync(&mut *db);
     }

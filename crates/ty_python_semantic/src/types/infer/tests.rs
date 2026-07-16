@@ -3,6 +3,7 @@ use crate::db::tests::{TestDb, setup_db};
 use crate::place::symbol;
 use crate::place::{ConsideredDefinitions, Place, global_symbol};
 use crate::types::{KnownClass, KnownInstanceType, check_types};
+use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Diagnostic, DiagnosticId};
 use ruff_db::files::{File, system_path_to_file};
 use ruff_db::system::DbWithWritableSystem as _;
@@ -52,7 +53,7 @@ fn assert_diagnostic_messages(diagnostics: &[Diagnostic], expected: &[&str]) {
 #[track_caller]
 fn assert_file_diagnostics(db: &TestDb, filename: &str, expected: &[&str]) {
     let file = system_path_to_file(db, filename).unwrap();
-    let diagnostics = check_types(db, file);
+    let diagnostics = check_types(db, PythonFile::new(db, file, db.python_version()));
 
     assert_diagnostic_messages(&diagnostics, expected);
 }
@@ -60,7 +61,7 @@ fn assert_file_diagnostics(db: &TestDb, filename: &str, expected: &[&str]) {
 #[track_caller]
 fn assert_revealed_type(db: &TestDb, filename: &str, expected: &str) {
     let file = system_path_to_file(db, filename).unwrap();
-    let diagnostics = check_types(db, file);
+    let diagnostics = check_types(db, PythonFile::new(db, file, db.python_version()));
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
 
     let diagnostic = &diagnostics[0];
