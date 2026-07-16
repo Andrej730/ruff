@@ -879,7 +879,11 @@ mod tests {
 
             for mut action in code_actions(
                 &self.db,
-                PythonFile::new(&self.db, self.file, ruff_db::Db::python_version(&self.db)),
+                PythonFile::new(
+                    &self.db,
+                    self.file,
+                    ty_module_resolver::Db::python_version(&self.db),
+                ),
                 self.diagnostic_range,
                 &lint.name,
             ) {

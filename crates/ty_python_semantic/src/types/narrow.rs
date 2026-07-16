@@ -138,11 +138,7 @@ fn all_narrowing_constraints_for_expression<'db>(
     db: &'db dyn Db,
     expression: Expression<'db>,
 ) -> ExpressionNarrowingConstraints<'db> {
-    let module = parsed_module(
-        db,
-        PythonFile::new(db, expression.file(db), db.python_version()),
-    )
-    .load(db);
+    let module = parsed_module(db, expression.python_file(db)).load(db);
     let predicate = PredicateNode::Expression(expression);
     ExpressionNarrowingConstraints {
         positive: NarrowingConstraintsBuilder::new(db, &module, predicate, true).finish(),

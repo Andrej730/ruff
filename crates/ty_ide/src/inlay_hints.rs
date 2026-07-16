@@ -879,7 +879,11 @@ mod tests {
         fn inlay_hints_with_settings(&mut self, settings: &InlayHintSettings) -> String {
             let hints = inlay_hints(
                 &self.db,
-                PythonFile::new(&self.db, self.file, ruff_db::Db::python_version(&self.db)),
+                PythonFile::new(
+                    &self.db,
+                    self.file,
+                    ty_module_resolver::Db::python_version(&self.db),
+                ),
                 self.range,
                 settings,
             );

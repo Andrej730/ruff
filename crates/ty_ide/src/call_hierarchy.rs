@@ -49,8 +49,7 @@ pub fn prepare_call_hierarchy(
             continue;
         };
 
-        let module_ref =
-            parsed_module(db, PythonFile::new(db, def.file(db), db.python_version())).load(db);
+        let module_ref = parsed_module(db, def.python_file(db)).load(db);
 
         if let Some(item) = CallHierarchyItem::from_definition(db, resolved, &module_ref) {
             items.push(item);

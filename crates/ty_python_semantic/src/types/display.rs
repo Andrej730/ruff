@@ -854,11 +854,7 @@ impl<'db> FmtDetailed<'db> for TypeAliasDisplay<'db> {
             let offset = definition
                 .focus_range(
                     self.db,
-                    &parsed_module(
-                        self.db,
-                        PythonFile::new(self.db, file, self.db.python_version()),
-                    )
-                    .load(self.db),
+                    &parsed_module(self.db, definition.python_file(self.db)).load(self.db),
                 )
                 .range()
                 .start();

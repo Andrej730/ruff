@@ -71,10 +71,6 @@ impl SourceDb for TestDb {
     fn files(&self) -> &Files {
         &self.files
     }
-
-    fn python_version(&self) -> PythonVersion {
-        Program::get(self).python_version(self)
-    }
 }
 
 impl DbWithTestSystem for TestDb {
@@ -91,6 +87,10 @@ impl DbWithTestSystem for TestDb {
 impl ModuleResolverDb for TestDb {
     fn search_paths(&self) -> &ty_module_resolver::SearchPaths {
         Program::get(self).search_paths(self)
+    }
+
+    fn python_version(&self) -> PythonVersion {
+        Program::get(self).python_version(self)
     }
 }
 

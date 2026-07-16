@@ -6,8 +6,9 @@ use itertools::Itertools;
 use ruff_python_ast::helpers::{Truthiness, any_over_expr, is_dotted_name};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
+
+use ruff_db::PythonFile;
 use ruff_db::source::{SourceText, source_text};
 use ruff_index::IndexVec;
 use ruff_python_ast::name::Name;
@@ -48,7 +49,6 @@ use crate::predicate::{
     PatternPredicateKind, Predicate, PredicateNode, PredicateOrLiteral, ScopedPredicateId,
     SequencePatternPredicateKind, StarImportPlaceholderPredicate, SubjectElementPatternPredicate,
 };
-use crate::program::Program;
 use crate::re_exports::exported_names;
 use crate::reachability_constraints::{
     ReachabilityConstraintsBuilder, ScopedReachabilityConstraintId,
@@ -230,7 +230,7 @@ impl ConditionFlowSnapshot {
 pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     // Builder state
     db: &'db dyn Db,
-    file: File,
+    file: PythonFile<'db>,
     source_type: PySourceType,
     module: &'ast ParsedModuleRef,
     scope_stack: Vec<ScopeInfo<'ast>>,
@@ -301,11 +301,15 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
 }
 
 impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
-    pub(super) fn new(db: &'db dyn Db, file: File, module_ref: &'ast ParsedModuleRef) -> Self {
+    pub(super) fn new(
+        db: &'db dyn Db,
+        file: PythonFile<'db>,
+        module_ref: &'ast ParsedModuleRef,
+    ) -> Self {
         let mut builder = Self {
             db,
             file,
-            source_type: file.source_type(db),
+            source_type: file.file(db).source_type(db),
             module: module_ref,
             scope_stack: Vec::new(),
             current_assignments: Vec::new(),
@@ -341,7 +345,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
             enclosing_snapshots: FxHashMap::default(),
 
-            python_version: Program::get(db).python_version(db),
+            python_version: file.python_version(db),
             source_text: OnceCell::new(),
             semantic_checker: SemanticSyntaxChecker::default(),
             in_try: false,
@@ -2160,7 +2164,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
         PatternPredicate::new(
             self.db,
-            self.file,
+            self.file.file(self.db),
             self.current_scope(),
             subject,
             kind,
@@ -2302,7 +2306,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         } else {
             Statement::Other(StatementInner::new(
                 self.db,
-                self.file,
+                self.file.file(self.db),
                 self.current_scope(),
                 AstNodeRef::new(self.module, statement_node),
             ))
@@ -2605,7 +2609,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     };
                 let unpack = Unpack::new(
                     self.db,
-                    self.file,
+                    self.file.file(self.db),
                     value_file_scope,
                     self.current_scope(),
                     // Note `target` belongs to the `self.module` tree
@@ -2696,7 +2700,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
     fn source_text(&self) -> &SourceText {
         self.source_text
-            .get_or_init(|| source_text(self.db, self.file))
+            .get_or_init(|| source_text(self.db, self.file.file(self.db)))
     }
 
     fn visit_stmt_impl(&mut self, stmt: &'ast ast::Stmt) {
@@ -2920,14 +2924,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // that `x` can be freely overwritten, and that we don't assume that an import
                 // in one function is visible in another function.
                 let mut is_self_import = false;
-                if self.file.is_package(self.db)
+                if self.file.file(self.db).is_package(self.db)
                     && let Ok(module_name) = ModuleName::from_identifier_parts(
                         self.db,
-                        self.file,
+                        self.file.file(self.db),
                         node.module.as_deref(),
                         node.level,
                     )
-                    && let Ok(thispackage) = ModuleName::package_for_file(self.db, self.file)
+                    && let Ok(thispackage) =
+                        ModuleName::package_for_file(self.db, self.file.file(self.db))
                 {
                     // Record whether this is equivalent to `from . import ...`
                     is_self_import = module_name == thispackage;
@@ -3000,13 +3005,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             continue;
                         }
 
-                        let Ok(module_name) =
-                            ModuleName::from_import_statement(self.db, self.file, node)
-                        else {
+                        let Ok(module_name) = ModuleName::from_import_statement(
+                            self.db,
+                            self.file.file(self.db),
+                            node,
+                        ) else {
                             continue;
                         };
 
-                        let Some(module) = resolve_module(self.db, self.file, &module_name) else {
+                        let Some(module) =
+                            resolve_module(self.db, self.file.file(self.db), &module_name)
+                        else {
                             continue;
                         };
 
@@ -3033,7 +3042,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             let node_ref = StarImportDefinitionNodeRef { node, symbol_id };
                             let star_import = StarImportPlaceholderPredicate::new(
                                 self.db,
-                                self.file,
+                                self.file.file(self.db),
                                 symbol_id,
                                 referenced_module,
                             );
@@ -4868,7 +4877,7 @@ impl SemanticSyntaxContext for SemanticIndexBuilder<'_, '_> {
             return;
         }
 
-        if self.db.should_check_file(self.file) {
+        if self.db.should_check_file(self.file.file(self.db)) {
             self.semantic_syntax_errors.borrow_mut().push(error);
         }
     }

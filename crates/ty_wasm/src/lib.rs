@@ -24,6 +24,7 @@ use ty_ide::{
     goto_type_definition, hover, inlay_hints, rename,
 };
 use ty_ide::{NavigationTarget, NavigationTargets, hints, signature_help};
+use ty_module_resolver::Db as _;
 use ty_project::metadata::options::Options;
 use ty_project::watch::{ChangeEvent, ChangedKind, CreatedKind, DeletedKind};
 use ty_project::{CheckMode, ProjectMetadata};

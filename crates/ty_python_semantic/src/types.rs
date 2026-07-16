@@ -13,7 +13,6 @@ use bitflags::bitflags;
 use call::{CallDunderError, CallError, CallErrorKind};
 use context::InferContext;
 use ruff_db::Instant;
-use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -8604,11 +8603,7 @@ impl<'db> AwaitError<'db> {
                 };
                 diag.info(format_args!("`__await__` is{possibly} not callable"));
                 if let Some(definition) = attribute_provenance.definition() {
-                    let module = parsed_module(
-                        db,
-                        PythonFile::new(db, definition.file(db), db.python_version()),
-                    )
-                    .load(db);
+                    let module = parsed_module(db, definition.python_file(db)).load(db);
                     diag.annotate(
                         Annotation::secondary(definition.focus_range(db, &module).into())
                             .message("attribute defined here"),

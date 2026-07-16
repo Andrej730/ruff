@@ -136,7 +136,7 @@ pub(crate) fn infer_definition_types<'db>(
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     let file = definition.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let module = parsed_module(db, definition.python_file(db)).load(db);
     let _span = tracing::trace_span!(
         "infer_definition_types",
         range = ?definition.kind(db).target_range(&module),
@@ -186,7 +186,7 @@ pub(crate) fn function_known_decorators<'db>(
     definition: Definition<'db>,
 ) -> FunctionDecoratorInference<'db> {
     let file = definition.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let module = parsed_module(db, definition.python_file(db)).load(db);
     let index = semantic_index(db, file);
 
     TypeInferenceBuilder::new(
@@ -271,7 +271,7 @@ pub(crate) fn infer_deferred_types<'db>(
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     let file = definition.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let module = parsed_module(db, definition.python_file(db)).load(db);
     let _span = tracing::trace_span!(
         "infer_deferred_types",
         definition = ?definition.as_id(),
@@ -344,7 +344,7 @@ pub(crate) fn infer_scope_types_impl<'db>(
     let file = scope.file(db);
     let _span = tracing::trace_span!("infer_scope_types", scope=?scope.as_id(), ?file).entered();
 
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let module = parsed_module(db, scope.python_file(db)).load(db);
 
     // Using the index here is fine because the code below depends on the AST anyway.
     // The isolation of the query is by the return inferred types.
@@ -380,7 +380,7 @@ pub(super) fn infer_expression_types_impl<'db>(
     let (expression, tcx) = input.into_inner(db);
 
     let file = expression.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let module = parsed_module(db, expression.python_file(db)).load(db);
     let _span = tracing::trace_span!(
         "infer_expression_types",
         expression = ?expression.as_id(),
@@ -1282,11 +1282,7 @@ impl<'db> DefinitionInference<'db> {
         // Eagerly store more precise types for collection literals to avoid an extra
         // cycle iteration, i.e., by inferring `list[Divergent]` instead of `Divergent`.
         if let DefinitionKind::Assignment(assignment) = definition.kind(db) {
-            let module = parsed_module(
-                db,
-                PythonFile::new(db, definition.file(db), db.python_version()),
-            )
-            .load(db);
+            let module = parsed_module(db, definition.python_file(db)).load(db);
             let known_collection = match assignment.value(&module) {
                 ast::Expr::Set(_) => Some(KnownClass::Set),
                 ast::Expr::List(_) => Some(KnownClass::List),

@@ -53,8 +53,7 @@ pub fn outgoing_calls(db: &dyn Db, file: PythonFile<'_>, offset: TextSize) -> Ve
             continue;
         };
         let def_file = def.file(db);
-        let def_parse_file = PythonFile::new(db, def_file, db.python_version());
-        let parsed = parsed_module(db, def_parse_file).load(db);
+        let parsed = parsed_module(db, def.python_file(db)).load(db);
 
         let model = SemanticModel::new(db, def_file);
         let mut finder = OutgoingCallsFinder {
@@ -154,11 +153,7 @@ impl<'a> OutgoingCallsFinder<'a, '_> {
                 _ => continue,
             }
             let def_file = def.file(self.db);
-            let module_ref = parsed_module(
-                self.db,
-                PythonFile::new(self.db, def_file, self.db.python_version()),
-            )
-            .load(self.db);
+            let module_ref = parsed_module(self.db, def.python_file(self.db)).load(self.db);
             let selection_range = def.focus_range(self.db, &module_ref).range();
 
             let key = CalleeKey {

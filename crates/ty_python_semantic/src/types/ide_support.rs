@@ -14,7 +14,6 @@ use crate::types::{
 };
 use crate::{Db, DisplaySettings, HasDefinition, HasType, SemanticModel};
 use itertools::Either;
-use ruff_db::PythonFile;
 use ruff_db::files::FileRange;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
@@ -1258,9 +1257,7 @@ pub fn inlay_hint_call_argument_details<'db>(
         };
 
         let parameter_label_offset = param.definition().map(|definition| {
-            let param_file = definition.file(db);
-            let module =
-                parsed_module(db, PythonFile::new(db, param_file, db.python_version())).load(db);
+            let module = parsed_module(db, definition.python_file(db)).load(db);
             definition.focus_range(db, &module)
         });
 
@@ -1291,7 +1288,6 @@ mod resolve_definition {
     }
 
     use indexmap::IndexSet;
-    use ruff_db::PythonFile;
     use ruff_db::files::{File, FileRange, vendored_path_to_file};
     use ruff_db::parsed::{ParsedModuleRef, parsed_module};
     use ruff_db::system::SystemPath;
@@ -1329,11 +1325,7 @@ mod resolve_definition {
         pub fn focus_range(&self, db: &dyn Db) -> FileRange {
             match self {
                 ResolvedDefinition::Definition(definition) => {
-                    let parsed = parsed_module(
-                        db,
-                        PythonFile::new(db, definition.file(db), db.python_version()),
-                    )
-                    .load(db);
+                    let parsed = parsed_module(db, definition.python_file(db)).load(db);
                     definition.focus_range(db, &parsed)
                 }
                 // For modules, navigate to the start of the file
@@ -1346,8 +1338,7 @@ mod resolve_definition {
             match self {
                 ResolvedDefinition::Definition(definition) => {
                     let file = definition.file(db);
-                    let parsed =
-                        parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                    let parsed = parsed_module(db, definition.python_file(db)).load(db);
                     definition.kind(db).category(file.is_stub(db), &parsed)
                 }
                 ResolvedDefinition::Module(_) | ResolvedDefinition::FileWithRange(_) => {
@@ -1476,8 +1467,7 @@ mod resolve_definition {
         match kind {
             DefinitionKind::Import(import_def) => {
                 let file = definition.file(db);
-                let module =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let module = parsed_module(db, definition.python_file(db)).load(db);
                 let alias = import_def.alias(&module);
 
                 if alias.asname.is_some()
@@ -1507,8 +1497,7 @@ mod resolve_definition {
 
             DefinitionKind::ImportFrom(import_from_def) => {
                 let file = definition.file(db);
-                let module =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let module = parsed_module(db, definition.python_file(db)).load(db);
                 let import_node = import_from_def.import(&module);
                 let alias = import_from_def.alias(&module);
 
@@ -1533,8 +1522,7 @@ mod resolve_definition {
             // For star imports, try to resolve to the specific symbol being accessed
             DefinitionKind::StarImport(star_import_def) => {
                 let file = definition.file(db);
-                let module =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let module = parsed_module(db, definition.python_file(db)).load(db);
                 let import_node = star_import_def.import(&module);
 
                 // If we have a symbol name, use the helper to resolve it in the target module
@@ -1759,8 +1747,7 @@ mod resolve_definition {
         let stub_ref;
         match *def {
             ResolvedDefinition::Definition(definition) => {
-                stub_parsed =
-                    parsed_module(db, PythonFile::new(db, stub_file, db.python_version()));
+                stub_parsed = parsed_module(db, definition.python_file(db));
                 stub_ref = stub_parsed.load(db);
 
                 // Get the leaf of the path (the definition itself)
@@ -1805,10 +1792,11 @@ mod resolve_definition {
         // Walk down the Definition Path in the real file
         let mut definitions = Vec::new();
         let index = semantic_index(db, real_file);
-        let real_parsed = parsed_module(db, PythonFile::new(db, real_file, db.python_version()));
+        let global_scope = global_scope(db, real_file);
+        let real_parsed = parsed_module(db, global_scope.python_file(db));
         let real_ref = real_parsed.load(db);
         // Start our search in the module (global) scope
-        let mut scopes = vec![global_scope(db, real_file)];
+        let mut scopes = vec![global_scope];
         while let Some(component) = path.pop() {
             trace!("Traversing definition path component: {}", component);
             // We're doing essentially a breadth-first traversal of the definitions.
@@ -2044,7 +2032,7 @@ pub fn type_hierarchy_subtypes(
             }
 
             let file_scope_id = scope_id.file_scope_id(db);
-            let parsed = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+            let parsed = parsed_module(db, scope_id.python_file(db)).load(db);
             if !is_range_reachable(db, index, file_scope_id, class_node.node(&parsed).range()) {
                 continue;
             }
@@ -2113,7 +2101,7 @@ fn class_literal_to_hierarchy_info(
 
     let (full_range, selection_range) = match class_literal {
         ClassLiteral::Static(static_class) => {
-            let parsed = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+            let parsed = parsed_module(db, static_class.python_file(db)).load(db);
             let header_range = static_class.header_range(db);
             let body_scope = static_class.body_scope(db);
 
@@ -2141,8 +2129,7 @@ fn class_literal_to_hierarchy_info(
         // (likely incorrectly) return the type hierarchy for `type` itself.
         ClassLiteral::Dynamic(dynamic_class) => {
             if let DynamicClassAnchor::Definition(definition) = dynamic_class.anchor(db) {
-                let parsed =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let parsed = parsed_module(db, definition.python_file(db)).load(db);
                 let kind = definition.kind(db);
                 (kind.full_range(&parsed), kind.target_range(&parsed))
             } else {
@@ -2154,8 +2141,7 @@ fn class_literal_to_hierarchy_info(
             if let DynamicNamedTupleAnchor::CollectionsDefinition { definition, .. }
             | DynamicNamedTupleAnchor::TypingDefinition(definition) = namedtuple.anchor(db)
             {
-                let parsed =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let parsed = parsed_module(db, definition.python_file(db)).load(db);
                 let kind = definition.kind(db);
                 (kind.full_range(&parsed), kind.target_range(&parsed))
             } else {
@@ -2169,8 +2155,7 @@ fn class_literal_to_hierarchy_info(
         }
         ClassLiteral::DynamicEnum(dynamic_enum) => {
             if let DynamicEnumAnchor::Definition { definition, .. } = dynamic_enum.anchor(db) {
-                let parsed =
-                    parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+                let parsed = parsed_module(db, definition.python_file(db)).load(db);
                 let kind = definition.kind(db);
                 (kind.full_range(&parsed), kind.target_range(&parsed))
             } else {
@@ -2239,10 +2224,10 @@ mod tests {
     use super::{CallArgumentForm, call_argument_forms};
     use crate::SemanticModel;
     use crate::db::tests::TestDbBuilder;
-    use ruff_db::Db as _;
     use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
+    use ty_module_resolver::Db as _;
 
     #[test]
     fn keyword_call_argument_forms_follow_source_order() -> anyhow::Result<()> {

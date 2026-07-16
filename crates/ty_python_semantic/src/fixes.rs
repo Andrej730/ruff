@@ -803,7 +803,6 @@ mod tests {
     use std::hash::{DefaultHasher, Hash, Hasher};
 
     use insta::assert_snapshot;
-    use ruff_db::Db as _;
     use ruff_db::PythonFile;
     use ruff_db::cancellation::CancellationTokenSource;
     use ruff_db::diagnostic::{
@@ -817,6 +816,7 @@ mod tests {
     use ruff_diagnostics::{Applicability, Edit, Fix};
     use ruff_text_size::{TextLen as _, TextRange, TextSize};
     use rustc_hash::FxHashMap;
+    use ty_module_resolver::Db as _;
 
     use super::suppress_all_diagnostics;
     use crate::Db;

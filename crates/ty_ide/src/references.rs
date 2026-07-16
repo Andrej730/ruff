@@ -311,11 +311,13 @@ fn parameter_owner_is_externally_visible(
 
 fn parameter_owner_is_externally_visible_for_target(
     db: &dyn Db,
-    definition: &ResolvedDefinition,
+    resolved: &ResolvedDefinition,
 ) -> bool {
-    let target = definition.focus_range(db);
-    let file = target.file();
-    let parsed = parsed_module(db, PythonFile::new(db, file, db.python_version()));
+    let Some(definition) = resolved.definition() else {
+        return false;
+    };
+    let parsed = parsed_module(db, definition.python_file(db));
+    let target = definition.focus_range(db, &parsed.load(db));
     let module = parsed.load(db);
 
     let covering = covering_node(module.syntax().into(), target.range());
@@ -786,9 +788,7 @@ impl<'a> LocalReferencesFinder<'a> {
         };
 
         let file = local_definition.file(db);
-        let module =
-            ruff_db::parsed::parsed_module(db, PythonFile::new(db, file, db.python_version()))
-                .load(db);
+        let module = ruff_db::parsed::parsed_module(db, local_definition.python_file(db)).load(db);
         let kind = local_definition.kind(db);
         let category = kind.category(file.is_stub(db), &module);
 

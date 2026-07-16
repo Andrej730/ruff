@@ -481,10 +481,7 @@ impl<'db> SemanticModel<'db> {
         match definition.kind(self.db) {
             DefinitionKind::TypeAlias(_) => true,
             DefinitionKind::AnnotatedAssignment(assignment) => {
-                let parsed = parsed_module(
-                    self.db,
-                    PythonFile::new(self.db, definition.file(self.db), self.db.python_version()),
-                );
+                let parsed = parsed_module(self.db, definition.python_file(self.db));
                 let model = Self::new(self.db, definition.file(self.db));
                 model.is_type_alias_annotation(assignment.annotation(&parsed.load(self.db)))
             }
@@ -503,11 +500,7 @@ impl<'db> SemanticModel<'db> {
                     return TypeQualifiers::empty();
                 };
                 let definition_file = definition.file(self.db);
-                let module = parsed_module(
-                    self.db,
-                    PythonFile::new(self.db, definition_file, self.db.python_version()),
-                )
-                .load(self.db);
+                let module = parsed_module(self.db, definition.python_file(self.db)).load(self.db);
                 if !definition
                     .kind(self.db)
                     .category(definition_file.is_stub(self.db), &module)
@@ -859,10 +852,10 @@ impl HasType for ast::ExceptHandlerExceptHandler {
 mod tests {
     use crate::db::tests::TestDbBuilder;
     use crate::{HasType, SemanticModel};
-    use ruff_db::Db as _;
     use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::parsed::parsed_module;
+    use ty_module_resolver::Db as _;
 
     #[test]
     fn function_type() -> anyhow::Result<()> {
