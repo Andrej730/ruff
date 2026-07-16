@@ -44,8 +44,8 @@
 //! When `if_uncertain` is `ALWAYS_FALSE` everywhere, the TDD degenerates to a standard BDD, and
 //! all operations have zero overhead compared to the binary case.
 //!
-//! Relation checks can also produce `GRADUAL` for materialization constraints that do not affect
-//! inference, without collapsing to `ALWAYS_FALSE` or `ALWAYS_TRUE`.
+//! Relation checks can also produce `GRADUAL` for materialization constraints on non-inferable
+//! gradual types that are not necessarily `ALWAYS_FALSE` or `ALWAYS_TRUE`.
 //!
 //! NOTE: This module is currently in a transitional state. We've added the BDD [`ConstraintSet`]
 //! representation, and updated all of our property checks to build up a constraint set and then
@@ -2104,7 +2104,7 @@ const ALWAYS_TRUE: NodeId = NodeId(0xffff_ffff);
 /// A special ID that is used for an "always false" / "never visible" constraint.
 const ALWAYS_FALSE: NodeId = NodeId(0xffff_fffe);
 
-/// Constraints on a gradual type's materialization that do not affect inference.
+/// Constraints on the materialization of non-inferable gradual types.
 const GRADUAL: NodeId = NodeId(0xffff_fffd);
 
 const SMALLEST_TERMINAL: NodeId = GRADUAL;
@@ -5627,7 +5627,7 @@ impl SequentMap {
         //      `(Invariant[S] ≤ T ≤ Invariant[τ]) → (S = τ)`
         //      `(Invariant[τ] ≤ T ≤ Invariant[U]) → (τ = U)`
         //
-        // and whenever the bounds are subtypes, even if they don't mention exactly the same
+        // and whenever the bounds are assignable, even if they don't mention exactly the same
         // types:
         //
         //   class Sub(Covariant[int]): ...
@@ -5635,12 +5635,12 @@ impl SequentMap {
         //   7. `(Covariant[S] ≤ T ≤ Sub) → (S ≤ int)`
         //      `(Sub ≤ T ≤ Covariant[U]) → (int ≤ U)`
         //
-        // To handle all of these cases, we perform a constraint set subtyping check to see
+        // To handle all of these cases, we perform a constraint set assignability check to see
         // when `L ≤ U`. This gives us a constraint set, which should be the rhs of the sequent
         // implication. (That is, this check directly encodes `(L ≤ T ≤ U) → (L ≤ U)` as an
         // implication.)
 
-        // Skip bounds that cannot produce useful constraints.
+        // Skip trivial cases where the assignability check won't produce useful results.
         if !constraint_data.bounds.has_lower()
             || !constraint_data.bounds.has_upper()
             || lower.is_never()
@@ -5649,15 +5649,16 @@ impl SequentMap {
             return;
         }
 
-        let when = builder.load(db, &lower.when_constraint_set_subtype_of_owned(db, upper));
+        let when = builder.load(
+            db,
+            &lower.when_constraint_set_assignable_to_owned(db, upper),
+        );
 
-        // Assignable bounds are not necessarily subtypes, so they may not imply any transitive
-        // constraints.
-        if when.is_never_satisfied(db) {
-            return;
-        }
+        // If L is _never_ assignable to U, this constraint would violate transitivity, and should
+        // never have been added.
+        debug_assert!(!when.is_never_satisfied(db));
 
-        // Fast path: If L is trivially always a subtype of U, there are no derived constraints
+        // Fast path: If L is trivially always assignable to U, there are no derived constraints
         // that we can infer. This would be handled correctly by the logic below, but this is a
         // useful early return. Since we only use this check as an early return happy path, we can
         // accept false negatives. That lets us use the simpler and cheaper check against
@@ -7640,7 +7641,7 @@ mod tests {
     }
 
     #[test]
-    fn gradual_bounds_are_top_materialized_in_sequents() {
+    fn gradual_bounds_are_preserved_in_assignability_sequents() {
         let db = setup_db();
         let t = create_typevar(&db, "T");
         let u = create_typevar(&db, "U");
@@ -7652,7 +7653,7 @@ mod tests {
             Some(Type::unknown()),
             Some(Type::TypeVar(u)),
         );
-        let implied = ConstraintId::new_with_bounds(&db, &builder, u, Some(Type::object()), None);
+        let implied = ConstraintId::new_with_bounds(&db, &builder, u, Some(Type::unknown()), None);
 
         let mut expected = SequentMap::default();
         expected.add_single_implication(&db, &builder, constraint, implied);

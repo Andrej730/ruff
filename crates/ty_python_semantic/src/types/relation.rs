@@ -225,12 +225,13 @@ pub(crate) enum GradualEvaluation {
     /// collapsing the result to `true`.
     Eager,
 
-    /// Distribute gradual constraints through the target and preserve constraints on inferable
-    /// type variables.
+    /// Produce constraints based on the possible materializations of the gradual type.
     ///
-    /// Comparisons involving only gradual materializations are represented by `GRADUAL`, the world
-    /// of non-inferable gradual constraints. This mode is only used with
-    /// [`TypeVarEvaluation::Lazy`].
+    /// Note that constraints on the materialization of the gradual type itself are represented
+    /// by [`TypeRelationChecker::gradual`], a sentinel value which is neither `true` nor `false`,
+    /// as gradual types are non-inferable, and so such constraints are not very useful. However,
+    /// constraints on other inferable type variables involving the gradual type are preserved.
+    /// As such, this mode is only useful when paired with [`TypeVarEvaluation::Lazy`].
     Lazy,
 }
 
@@ -513,46 +514,6 @@ impl<'db> Type<'db> {
             db,
             TypePair::new(db, self, target),
         ))
-    }
-
-    /// Returns an _owned_ (i.e. salsa-cached) constraint set that describes when `self` is a
-    /// constraint-set subtype of `target`.
-    ///
-    /// Recursive relations are evaluated coinductively: a cycle is provisionally satisfied until
-    /// another part of the relation produces a contradiction.
-    pub(super) fn when_constraint_set_subtype_of_owned(
-        self,
-        db: &'db dyn Db,
-        target: Type<'db>,
-    ) -> Cow<'db, OwnedConstraintSet<'db>> {
-        #[salsa::tracked(
-            returns(ref),
-            cycle_initial=|_, _, _, _| OwnedConstraintSet::always(),
-            heap_size=ruff_memory_usage::heap_size,
-        )]
-        fn when_constraint_set_subtype_of_owned_impl<'db>(
-            db: &'db dyn Db,
-            source: Type<'db>,
-            target: Type<'db>,
-        ) -> OwnedConstraintSet<'db> {
-            let constraints = ConstraintSetBuilder::new();
-            constraints.into_owned(|constraints| {
-                source.has_relation_to_with_typevar_evaluation(
-                    db,
-                    target,
-                    constraints,
-                    InferableTypeVars::None,
-                    TypeRelation::Subtyping,
-                    TypeVarEvaluation::Lazy,
-                )
-            })
-        }
-
-        if self.materialized_divergent_fallback().is_none() && self == target {
-            return Cow::Owned(OwnedConstraintSet::always());
-        }
-
-        Cow::Borrowed(when_constraint_set_subtype_of_owned_impl(db, self, target))
     }
 
     pub(super) fn when_constraint_set_assignable_to<'c>(
@@ -1403,18 +1364,20 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             // if `T` is also a dynamic type or a union that contains a dynamic type. Similarly,
             // `T <: Any` only holds true if `T` is a dynamic type or an intersection that
             // contains a dynamic type.
-            (Type::Dynamic(_), _) if !self.is_lazy_gradual_assignability() => match self.relation {
-                TypeRelation::Subtyping | TypeRelation::SubtypingAssuming => self.never(),
-                TypeRelation::Assignability => self.always(),
-                TypeRelation::Redundancy { .. } => ConstraintSet::from_bool(
+            (Type::Dynamic(_dynamic), _) if !self.is_lazy_gradual_assignability() => {
+                ConstraintSet::from_bool(
                     self.constraints,
-                    match target {
-                        Type::Dynamic(_) => true,
-                        Type::Union(union) => union.elements(db).iter().any(Type::is_dynamic),
-                        _ => false,
+                    match self.relation {
+                        TypeRelation::Subtyping | TypeRelation::SubtypingAssuming => false,
+                        TypeRelation::Assignability => true,
+                        TypeRelation::Redundancy { .. } => match target {
+                            Type::Dynamic(_) => true,
+                            Type::Union(union) => union.elements(db).iter().any(Type::is_dynamic),
+                            _ => false,
+                        },
                     },
-                ),
-            },
+                )
+            }
             (_, Type::Dynamic(_)) => ConstraintSet::from_bool(
                 self.constraints,
                 match self.relation {
@@ -1776,13 +1739,21 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                         })
                 }),
 
-            // In lazy mode, unions and intersections above decompose the target before a gradual
-            // source is materialized. Their ordinary constraint-set operations can therefore
-            // retain constraints from every informative element without any gradual-specific
-            // branching here.
+            // Given the assignability check `Any <: tuple[T]`, `Any` may materialize to a type that
+            // is disjoint from of `tuple`, in which case we end up with constraints that collapse to
+            // the sentinel value [`TypeRelationChecker::gradual`]. In the more interesting case, to a
+            // it may materialize to a subtype of `tuple`, in which case we have `tuple[Any] <: tuple[T]`.
+            // In other words, we distribute the gradual type across any inferable type variables in
+            // the target type.
             (gradual @ Type::Dynamic(_), _) => {
-                debug_assert!(self.is_lazy_gradual_assignability());
-                self.distribute_gradual_constraints(db, gradual, target)
+                let source = target.specialize_inferable(db, self.inferable, gradual);
+
+                let constraints = self.check_type_pair(db, source, target);
+                if constraints.is_always_satisfied(db) {
+                    self.gradual()
+                } else {
+                    constraints
+                }
             }
 
             (Type::Intersection(intersection), _) => {

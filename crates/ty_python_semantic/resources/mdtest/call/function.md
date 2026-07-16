@@ -142,8 +142,9 @@ reveal_type(map(operator.add, ints, dynamic))  # revealed: map[int | Any]
 
 ## Gradual constraints for nested generic parameters
 
-When a gradual type is assigned to a type such as `tuple[T]`, generic inference projects its
-evidence into the nested type variable as a lower bound such as `Any <: T` or `Unknown <: T`.
+When a gradual type is assigned to a type such as `tuple[T]`, we assume that the gradual type
+materializes to some tuple type `tuple[Any]`, and so infer a lower bound `Any <: T`, preserving
+graduality.
 
 ```toml
 [environment]
@@ -210,21 +211,14 @@ def _(x: Any, callback: Any):
     reveal_type(g(x))  # revealed: Any
     reveal_type(f(g(x)))  # revealed: Any
     reveal_type(f_tuple(g(x)))  # revealed: Any
-    # Gradual evidence combines with other argument-derived constraints.
     reveal_type(g_with_fallback(x, 1))  # revealed: Any | Literal[1]
-    # Distribution recurses through generic types before splitting nested unions.
     reveal_type(g_union(x))  # revealed: tuple[Any, Any]
-    # Gradual constraints from each viable union arm are combined.
     reveal_type(g_union_arms(x))  # revealed: tuple[Any, Any]
     reveal_type(g_default(x))  # revealed: Any
     reveal_type(g_optional(x))  # revealed: Any
     reveal_type(g_iterable(x))  # revealed: Any
-    # Recursive structural checks reuse the active relation's cycle detector.
     reveal_type(recursive_protocol(x))  # revealed: Any
-    # Invariant type parameters are handled by ordinary specialization assignability.
     reveal_type(invariant(x))  # revealed: Any
-    # A gradual callable provides an upper bound for a type variable that only occurs in its
-    # parameter types, but a lower bound for a type variable in its return type.
     reveal_type(consume(callback, 1))  # revealed: Literal[1]
     reveal_type(produce(callback, 1))  # revealed: Any | Literal[1]
 
@@ -255,39 +249,7 @@ def outer[S](callback: Any, value: S):
     def inner[T](callback: Callable[[T], S], value: T) -> tuple[T, S]:
         raise NotImplementedError
 
-    # Only `T` is inferable for the inner call. The synthetic specialization must preserve `S`,
-    # and lazy type-variable constraints must preserve the relationship `S <: T`.
     reveal_type(inner(callback, value))  # revealed: tuple[S@outer, S@outer]
-```
-
-## Partially gradual sibling type context
-
-When precise and gradual arguments contribute to the same invariant type parameters, inline literals
-should be inferred using the final specialization. Existing containers should keep their original
-types:
-
-```toml
-[environment]
-python-version = "3.12"
-```
-
-```py
-from ty_extensions import Unknown
-
-def merge[K, V](*maps: dict[K, V]) -> tuple[K, V]:
-    raise NotImplementedError
-
-def _(dynamic: Unknown):
-    # TODO: Inline literals should be contextually inferred against the final specialization.
-    # error: [invalid-argument-type]
-    # error: [invalid-argument-type]
-    reveal_type(merge({"a": 1}, {2: "b"}, dynamic))  # revealed: tuple[str | int | Unknown, int | str | Unknown]
-
-    narrow = {"a": 1}
-    # TODO: Only `narrow` should produce an error; the second argument is an inline literal.
-    # error: [invalid-argument-type]
-    # error: [invalid-argument-type]
-    merge(narrow, {2: "b"}, dynamic)
 ```
 
 ## Decorated

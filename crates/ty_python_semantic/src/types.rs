@@ -6458,6 +6458,23 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// Replaces every inferable type variable with `replacement`.
+    pub(crate) fn specialize_inferable(
+        self,
+        db: &'db dyn Db,
+        inferable: InferableTypeVars<'db>,
+        replacement: Type<'db>,
+    ) -> Type<'db> {
+        self.apply_type_mapping(
+            db,
+            &TypeMapping::ApplySpecialization(ApplySpecialization::Inferable(
+                inferable,
+                replacement,
+            )),
+            TypeContext::default(),
+        )
+    }
+
     /// Applies a specialization to this type, replacing any typevars with the types that they are
     /// specialized to.
     ///

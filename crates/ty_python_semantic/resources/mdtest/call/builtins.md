@@ -381,14 +381,14 @@ def partial_mutually_recursive_alias(x: RecursivePartialA) -> bool:  # error: [i
 ## Generic builtins preserve gradual callback constraints
 
 These examples are minimized from ecosystem regressions involving explicit `Never` and `object`
-bounds. An unknown iterable contributes gradual evidence rather than leaving generic parameters
-unconstrained. Callable inference can still propagate that evidence into a result type; ideally it
-would preserve a statically known callback return type where possible.
+bounds. The constraint solver should preserve gradual `Unknown` types instead of falling back to the
+upper bounds of `Sized` or `object`.
 
 ```py
+from typing import Any
 from ty_extensions import Unknown
 
-def _(xs: Unknown):
+def _(xs: Unknown, values: list[tuple[Any, ...]]):
     reveal_type(sorted(xs, key=len))  # revealed: list[Unknown]
 
     # TODO: should be `map[str]`
@@ -396,60 +396,20 @@ def _(xs: Unknown):
 
     # TODO: should be `LiteralString`
     reveal_type("".join(map("{}".format, xs)))  # revealed: str
-```
 
-Graduality should also flow through the input and output type variable of a generic callback.
-Currently, the callback is solved to its bound before the outer `map` call incorporates the
-iterable's gradual element type:
-
-```toml
-[environment]
-python-version = "3.12"
+    reveal_type(map(min, values))  # revealed: map[Any]
 ```
 
 ```py
-from collections.abc import Iterable
-from typing import Any, Protocol
+from typing import Any, Sequence
 
-class Comparable(Protocol):
-    def __lt__(self, other: Any, /) -> bool: ...
-
-def minimum[C: Comparable](values: Iterable[C]) -> C:
-    raise NotImplementedError
-
-def _(values: list[tuple[Any, ...]]) -> None:
-    # TODO: both results should be `map[Any]`.
-    reveal_type(map(min, values))  # revealed: map[object]
-    reveal_type(map(minimum, values))  # revealed: map[object]
-
-    # TODO: both assignments should be accepted.
-    builtin_result: tuple[int, ...] = tuple(map(min, values))  # error: [invalid-assignment]
-    custom_result: tuple[int, ...] = tuple(map(minimum, values))  # error: [invalid-assignment]
-```
-
-## Generic builtin call context preserves gradual types
-
-```py
-from collections.abc import Sequence
-from typing import Any, Union
-
-class Vector:
-    length: float
-
-def relative_error(x: Any, y: Any, values: Sequence[float]) -> float:
+def _(x: Any, y: Any, values: Sequence[float]):
     largest = max(abs(x), abs(y), *(value for value in values))
     reveal_type(largest)  # revealed: Any | int | float
-    return largest * 1.0
 
-def relative_error_unknown(x, y, values: Sequence[Union[float, Vector]]) -> float:
-    largest = max(
-        abs(x),
-        abs(y),
-        *(abs(value) for value in values if isinstance(value, float)),
-        *(value.length for value in values if isinstance(value, Vector)),
-    )
+def _(x, y, values: Sequence[float]):
+    largest = max(abs(x), abs(y), *(value for value in values))
     reveal_type(largest)  # revealed: Unknown | int | float
-    return largest * 1.0
 ```
 
 ## Mapping methods accept arbitrary object types
