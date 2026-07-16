@@ -340,7 +340,7 @@ impl<'db> QualifiedTypeAliasName<'db> {
     /// would return `["a", "b", "C"]`.
     pub(crate) fn components_excluding_self(&self) -> Vec<String> {
         let definition = self.type_alias.definition(self.db);
-        let file = definition.file(self.db);
+        let file = definition.python_file(self.db);
         let file_scope_id = definition.file_scope(self.db);
 
         // Type aliases are defined directly in their enclosing scope (no body scope like classes),

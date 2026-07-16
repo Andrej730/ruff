@@ -2164,7 +2164,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
         PatternPredicate::new(
             self.db,
-            self.file.file(self.db),
+            self.file,
             self.current_scope(),
             subject,
             kind,
@@ -2306,7 +2306,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         } else {
             Statement::Other(StatementInner::new(
                 self.db,
-                self.file.file(self.db),
+                self.file,
                 self.current_scope(),
                 AstNodeRef::new(self.module, statement_node),
             ))
@@ -2609,7 +2609,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     };
                 let unpack = Unpack::new(
                     self.db,
-                    self.file.file(self.db),
+                    self.file,
                     value_file_scope,
                     self.current_scope(),
                     // Note `target` belongs to the `self.module` tree
@@ -2924,15 +2924,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // that `x` can be freely overwritten, and that we don't assume that an import
                 // in one function is visible in another function.
                 let mut is_self_import = false;
-                if self.file.file(self.db).is_package(self.db)
+                let source_file = self.file.file(self.db);
+                if source_file.is_package(self.db)
                     && let Ok(module_name) = ModuleName::from_identifier_parts(
                         self.db,
-                        self.file.file(self.db),
+                        source_file,
                         node.module.as_deref(),
                         node.level,
                     )
-                    && let Ok(thispackage) =
-                        ModuleName::package_for_file(self.db, self.file.file(self.db))
+                    && let Ok(thispackage) = ModuleName::package_for_file(self.db, source_file)
                 {
                     // Record whether this is equivalent to `from . import ...`
                     is_self_import = module_name == thispackage;
@@ -3005,24 +3005,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             continue;
                         }
 
-                        let Ok(module_name) = ModuleName::from_import_statement(
-                            self.db,
-                            self.file.file(self.db),
-                            node,
-                        ) else {
-                            continue;
-                        };
-
-                        let Some(module) =
-                            resolve_module(self.db, self.file.file(self.db), &module_name)
+                        let Ok(module_name) =
+                            ModuleName::from_import_statement(self.db, source_file, node)
                         else {
                             continue;
                         };
 
-                        let Some(referenced_module) = module.file(self.db) else {
+                        let Some(module) = resolve_module(self.db, source_file, &module_name)
+                        else {
                             continue;
                         };
 
+                        let Some(referenced_parse_file) = module.python_file(self.db) else {
+                            continue;
+                        };
                         // In order to understand the reachability of definitions created by a `*` import,
                         // we need to know the reachability of the global-scope definitions in the
                         // `referenced_module` the symbols imported from. Much like predicates for `if`
@@ -3037,14 +3033,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         // ```
                         //
                         // For more details, see the doc-comment on `StarImportPlaceholderPredicate`.
-                        for export in exported_names(self.db, referenced_module) {
+                        for export in exported_names(self.db, referenced_parse_file) {
                             let symbol_id = self.add_symbol(export.clone());
                             let node_ref = StarImportDefinitionNodeRef { node, symbol_id };
                             let star_import = StarImportPlaceholderPredicate::new(
                                 self.db,
-                                self.file.file(self.db),
+                                source_file,
                                 symbol_id,
-                                referenced_module,
+                                referenced_parse_file,
                             );
 
                             let star_import_predicate = self.add_predicate(star_import.into());

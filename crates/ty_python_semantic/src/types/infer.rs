@@ -44,7 +44,6 @@
 //! be considered a bug.)
 
 use itertools::Either;
-use ruff_db::PythonFile;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
@@ -491,8 +490,9 @@ fn infer_statement_types_impl<'db>(
     db: &'db dyn Db,
     statement: StatementInner<'db>,
 ) -> StatementInferenceInner<'db> {
-    let file = statement.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
+    let python_file = statement.python_file(db);
+    let file = python_file.file(db);
+    let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_statement_types",
         statement = ?statement.as_id(),
@@ -669,10 +669,14 @@ impl<'db> From<Type<'db>> for TypeContext<'db> {
     heap_size=ruff_memory_usage::heap_size
 )]
 pub(super) fn infer_unpack_types<'db>(db: &'db dyn Db, unpack: Unpack<'db>) -> UnpackResult<'db> {
-    let file = unpack.file(db);
-    let module = parsed_module(db, PythonFile::new(db, file, db.python_version())).load(db);
-    let _span = tracing::trace_span!("infer_unpack_types", range=?unpack.range(db, &module), ?file)
-        .entered();
+    let python_file = unpack.python_file(db);
+    let module = parsed_module(db, python_file).load(db);
+    let _span = tracing::trace_span!(
+        "infer_unpack_types",
+        range=?unpack.range(db, &module),
+        file=?python_file.file(db)
+    )
+    .entered();
 
     let mut unpacker = Unpacker::new(db, unpack.target_scope(db), &module);
     unpacker.unpack(unpack.target(db, &module), unpack.value(db));

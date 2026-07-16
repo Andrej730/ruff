@@ -159,7 +159,7 @@ impl<'db> FieldMetadata<'db> {
         // using `StrictInt = Annotated[int, Strict()]`. Since we don't retain the `Annotated`
         // metadata, we need to follow the alias back to its definition and parse the metadata
         // from there.
-        let model = SemanticModel::new(db, definition.file(db));
+        let model = SemanticModel::new(db, definition.python_file(db));
         let Some(alias_definition) = definitions_for_name(
             &model,
             name.id.as_str(),

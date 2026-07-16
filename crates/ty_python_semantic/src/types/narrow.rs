@@ -33,8 +33,6 @@ use ty_python_core::scope::ScopeId;
 use ty_python_core::{ExpressionNodeKey, NarrowingEvaluator, place_table, semantic_index};
 
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
-
-use ruff_db::PythonFile;
 use ruff_python_ast::name::Name;
 use ruff_python_stdlib::identifiers::is_identifier;
 
@@ -121,11 +119,7 @@ fn all_narrowing_constraints_for_pattern<'db>(
     db: &'db dyn Db,
     pattern: PatternPredicate<'db>,
 ) -> Option<FrozenNarrowingConstraints<'db>> {
-    let module = parsed_module(
-        db,
-        PythonFile::new(db, pattern.file(db), db.python_version()),
-    )
-    .load(db);
+    let module = parsed_module(db, pattern.python_file(db)).load(db);
     NarrowingConstraintsBuilder::new(db, &module, PredicateNode::Pattern(pattern), true).finish()
 }
 
@@ -151,11 +145,7 @@ fn all_negative_narrowing_constraints_for_pattern<'db>(
     db: &'db dyn Db,
     pattern: PatternPredicate<'db>,
 ) -> Option<FrozenNarrowingConstraints<'db>> {
-    let module = parsed_module(
-        db,
-        PythonFile::new(db, pattern.file(db), db.python_version()),
-    )
-    .load(db);
+    let module = parsed_module(db, pattern.python_file(db)).load(db);
     NarrowingConstraintsBuilder::new(db, &module, PredicateNode::Pattern(pattern), false).finish()
 }
 
@@ -165,11 +155,7 @@ fn all_narrowing_constraints_for_subject_element_pattern<'db>(
     pattern: PatternPredicate<'db>,
     target: ExpressionNodeKey,
 ) -> Option<FrozenNarrowingConstraints<'db>> {
-    let module = parsed_module(
-        db,
-        PythonFile::new(db, pattern.file(db), db.python_version()),
-    )
-    .load(db);
+    let module = parsed_module(db, pattern.python_file(db)).load(db);
     NarrowingConstraintsBuilder::new(
         db,
         &module,

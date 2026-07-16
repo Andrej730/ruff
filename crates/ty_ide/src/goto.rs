@@ -260,7 +260,7 @@ impl<'db> Definitions<'db> {
         let ty_def = ty.definition(db)?;
         let resolved = match ty_def {
             ty_python_semantic::types::TypeDefinition::Module(module) => {
-                ResolvedDefinition::Module(module.file(db)?)
+                ResolvedDefinition::Module(module.python_file(db)?)
             }
             ty_python_semantic::types::TypeDefinition::StaticClass(definition)
             | ty_python_semantic::types::TypeDefinition::DynamicClass(definition)
@@ -365,7 +365,7 @@ impl<'db> Definitions<'db> {
                     }
                 }
                 ResolvedDefinition::Module(file) => {
-                    NavigationTarget::new(file, TextRange::default())
+                    NavigationTarget::new(file.file(db), TextRange::default())
                 }
                 ResolvedDefinition::FileWithRange(file_range) => NavigationTarget::from(file_range),
             })
@@ -1393,7 +1393,7 @@ fn definitions_for_module<'db>(
     level: u32,
 ) -> Option<Vec<ResolvedDefinition<'db>>> {
     let module = model.resolve_module(module, level)?;
-    let file = module.file(model.db())?;
+    let file = module.python_file(model.db())?;
     Some(vec![ResolvedDefinition::Module(file)])
 }
 

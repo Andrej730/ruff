@@ -1288,6 +1288,7 @@ mod resolve_definition {
     }
 
     use indexmap::IndexSet;
+    use ruff_db::PythonFile;
     use ruff_db::files::{File, FileRange, vendored_path_to_file};
     use ruff_db::parsed::{ParsedModuleRef, parsed_module};
     use ruff_db::system::SystemPath;
@@ -1316,7 +1317,7 @@ mod resolve_definition {
         /// The import resolved to a specific definition within a module
         Definition(Definition<'db>),
         /// The import resolved to an entire module
-        Module(File),
+        Module(PythonFile<'db>),
         /// The import resolved to a file with a specific range
         FileWithRange(FileRange),
     }
@@ -1329,7 +1330,9 @@ mod resolve_definition {
                     definition.focus_range(db, &parsed)
                 }
                 // For modules, navigate to the start of the file
-                ResolvedDefinition::Module(module) => FileRange::new(*module, TextRange::default()),
+                ResolvedDefinition::Module(module) => {
+                    FileRange::new(module.file(db), TextRange::default())
+                }
                 ResolvedDefinition::FileWithRange(file_range) => *file_range,
             }
         }
@@ -1358,7 +1361,7 @@ mod resolve_definition {
         fn file(&self, db: &'db dyn Db) -> File {
             match self {
                 ResolvedDefinition::Definition(definition) => definition.file(db),
-                ResolvedDefinition::Module(file) => *file,
+                ResolvedDefinition::Module(file) => file.file(db),
                 ResolvedDefinition::FileWithRange(file_range) => file_range.file(),
             }
         }
@@ -1486,7 +1489,7 @@ mod resolve_definition {
                     return Vec::new(); // Module not found, return empty list
                 };
 
-                let Some(module_file) = resolved_module.file(db) else {
+                let Some(module_file) = resolved_module.python_file(db) else {
                     return Vec::new(); // No file for module, return empty list
                 };
 
@@ -1631,7 +1634,7 @@ mod resolve_definition {
         let mut full_submodule_name = module_name;
         full_submodule_name.extend(&submodule_name);
         let module = resolve_module(db, file, &full_submodule_name)?;
-        let file = module.file(db)?;
+        let file = module.python_file(db)?;
 
         Some(ResolvedDefinition::Module(file))
     }
@@ -1726,7 +1729,8 @@ mod resolve_definition {
         let real_module =
             resolve_real_module(db, stub_file_for_module_lookup, stub_module.name(db))?;
         trace!("Found real module: {}", real_module.name(db));
-        let real_file = real_module.file(db)?;
+        let real_parse_file = real_module.python_file(db)?;
+        let real_file = real_parse_file.file(db);
         trace!("Found real file: {}", real_file.path(db));
 
         // A definition has a "Definition Path" in a file made of nested definitions (~scopes):
@@ -1779,7 +1783,7 @@ mod resolve_definition {
                     stub_file.path(db),
                     real_file.path(db)
                 );
-                return Some(vec![ResolvedDefinition::Module(real_file)]);
+                return Some(vec![ResolvedDefinition::Module(real_parse_file)]);
             }
             ResolvedDefinition::FileWithRange(_) => {
                 // Not yet implemented -- in this case we want to recover something like a Definition
@@ -2243,7 +2247,8 @@ cast(val="", typ=int)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()
@@ -2283,7 +2288,8 @@ f(y="", x=1)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()
@@ -2319,7 +2325,8 @@ f(val="", typ=int)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()
@@ -2356,7 +2363,8 @@ f("", int)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()
@@ -2396,7 +2404,8 @@ f(int, x)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()
@@ -2440,7 +2449,8 @@ TypeAliasType("Alias", int)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let calls: Vec<_> = parsed
             .suite()
             .iter()
@@ -2485,7 +2495,8 @@ cast(*args)
             .build()?;
 
         let file = system_path_to_file(&db, "/src/foo.py").unwrap();
-        let parsed = parsed_module(&db, PythonFile::new(&db, file, db.python_version())).load(&db);
+        let file = PythonFile::new(&db, file, db.python_version());
+        let parsed = parsed_module(&db, file).load(&db);
         let call = parsed
             .suite()
             .last()

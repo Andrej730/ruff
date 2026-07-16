@@ -298,9 +298,9 @@ pub fn inlay_hints(
 
     let source = source_text(db, source_file);
     let stylist = Stylist::from_tokens(ast.tokens(), source.as_str());
-    let importer = Importer::new(db, &stylist, source_file, source.as_str(), &ast);
+    let importer = Importer::new(db, &stylist, file, source.as_str(), &ast);
 
-    let mut visitor = InlayHintVisitor::new(db, source_file, importer, range, settings);
+    let mut visitor = InlayHintVisitor::new(db, file, importer, range, settings);
 
     visitor.visit_body(ast.suite());
 
@@ -368,7 +368,7 @@ struct InlayHintVisitor<'a, 'db> {
 impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     fn new(
         db: &'db dyn Db,
-        file: File,
+        file: PythonFile<'db>,
         importer: Importer<'db>,
         range: TextRange,
         settings: &'a InlayHintSettings,

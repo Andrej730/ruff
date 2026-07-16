@@ -37,7 +37,7 @@ pub fn prepare_call_hierarchy(
     offset: TextSize,
 ) -> Option<Vec<CallHierarchyItem>> {
     let module = parsed_module(db, file).load(db);
-    let model = SemanticModel::new(db, file.file(db));
+    let model = SemanticModel::new(db, file);
     let goto_target = find_goto_target(&model, &module, offset)?;
     let definitions = goto_target
         .definitions(&model, ImportAliasResolution::ResolveAliases)?

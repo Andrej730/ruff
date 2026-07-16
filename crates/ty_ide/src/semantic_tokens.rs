@@ -189,7 +189,7 @@ pub fn semantic_tokens(
     range: Option<TextRange>,
 ) -> SemanticTokens {
     let parsed = parsed_module(db, file).load(db);
-    let model = SemanticModel::new(db, file.file(db));
+    let model = SemanticModel::new(db, file);
 
     let mut visitor = SemanticTokenVisitor::new(&model, range);
     visitor.expecting_docstring = true;
@@ -303,8 +303,7 @@ impl<'db> SemanticTokenVisitor<'db> {
     ) -> Option<(SemanticTokenType, SemanticTokenModifier)> {
         let mut modifiers = SemanticTokenModifier::empty();
         let db = self.model.db();
-        let file = definition.file(db);
-        let model = SemanticModel::new(db, file);
+        let model = SemanticModel::new(db, definition.python_file(db));
 
         if model.is_type_alias_definition(definition) {
             return Some((SemanticTokenType::Class, modifiers));

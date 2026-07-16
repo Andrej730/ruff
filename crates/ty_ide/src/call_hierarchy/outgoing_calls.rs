@@ -32,7 +32,7 @@ use ty_python_semantic::{ImportAliasResolution, SemanticModel};
 /// traversing the containing item's body.
 pub fn outgoing_calls(db: &dyn Db, file: PythonFile<'_>, offset: TextSize) -> Vec<OutgoingCall> {
     let module = parsed_module(db, file).load(db);
-    let model = SemanticModel::new(db, file.file(db));
+    let model = SemanticModel::new(db, file);
     let Some(goto_target) = find_goto_target(&model, &module, offset) else {
         return Vec::new();
     };
@@ -52,10 +52,9 @@ pub fn outgoing_calls(db: &dyn Db, file: PythonFile<'_>, offset: TextSize) -> Ve
         let Some(def) = resolved.definition() else {
             continue;
         };
-        let def_file = def.file(db);
         let parsed = parsed_module(db, def.python_file(db)).load(db);
 
-        let model = SemanticModel::new(db, def_file);
+        let model = SemanticModel::new(db, def.python_file(db));
         let mut finder = OutgoingCallsFinder {
             db,
             model: &model,
