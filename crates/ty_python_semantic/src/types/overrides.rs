@@ -1363,7 +1363,7 @@ fn is_local_member_function<'db>(
     member_name: &Name,
     member_scope: ScopeId<'db>,
 ) -> bool {
-    function.file(db) == member_scope.file(db)
+    function.python_file(db) == member_scope.python_file(db)
         && function.definition(db).scope(db) == member_scope
         && function.name(db) == member_name
 }

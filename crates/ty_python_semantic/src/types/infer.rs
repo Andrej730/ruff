@@ -135,12 +135,11 @@ pub(crate) fn infer_definition_types<'db>(
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     let python_file = definition.python_file(db);
-    let file = python_file.file(db);
     let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_definition_types",
         range = ?definition.kind(db).target_range(&module),
-        ?file
+        ?python_file
     )
     .entered();
 
@@ -149,6 +148,7 @@ pub(crate) fn infer_definition_types<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Definition(definition),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -198,6 +198,7 @@ pub(crate) fn function_known_decorators<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::FunctionDecorators(definition),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -278,13 +279,12 @@ pub(crate) fn infer_deferred_types<'db>(
     definition: Definition<'db>,
 ) -> DefinitionInference<'db> {
     let python_file = definition.python_file(db);
-    let file = python_file.file(db);
     let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_deferred_types",
         definition = ?definition.as_id(),
         range = ?definition.kind(db).target_range(&module),
-        ?file
+        ?python_file
     )
     .entered();
 
@@ -293,6 +293,7 @@ pub(crate) fn infer_deferred_types<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Deferred(definition),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -356,8 +357,8 @@ pub(crate) fn infer_scope_types_impl<'db>(
 ) -> ScopeInference<'db> {
     let (scope, tcx) = input.into_inner(db);
     let python_file = scope.python_file(db);
-    let file = python_file.file(db);
-    let _span = tracing::trace_span!("infer_scope_types", scope=?scope.as_id(), ?file).entered();
+    let _span =
+        tracing::trace_span!("infer_scope_types", scope=?scope.as_id(), ?python_file).entered();
 
     let module = parsed_module(db, python_file).load(db);
 
@@ -368,6 +369,7 @@ pub(crate) fn infer_scope_types_impl<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Scope(scope, tcx),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -402,13 +404,12 @@ pub(super) fn infer_expression_types_impl<'db>(
     let (expression, tcx) = input.into_inner(db);
 
     let python_file = expression.python_file(db);
-    let file = python_file.file(db);
     let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_expression_types",
         expression = ?expression.as_id(),
         range = ?expression.node_ref(db).node(&module).range(),
-        ?file
+        ?python_file
     )
     .entered();
 
@@ -417,6 +418,7 @@ pub(super) fn infer_expression_types_impl<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Expression(expression, tcx),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -516,13 +518,12 @@ fn infer_statement_types_impl<'db>(
     statement: StatementInner<'db>,
 ) -> StatementInferenceInner<'db> {
     let python_file = statement.python_file(db);
-    let file = python_file.file(db);
     let module = parsed_module(db, python_file).load(db);
     let _span = tracing::trace_span!(
         "infer_statement_types",
         statement = ?statement.as_id(),
         range = ?statement.node_ref(db).node(&module).range(),
-        ?file
+        ?python_file
     )
     .entered();
 
@@ -531,6 +532,7 @@ fn infer_statement_types_impl<'db>(
     TypeInferenceBuilder::new(
         db,
         InferenceRegion::Statement(statement),
+        python_file.file(db),
         python_file,
         index,
         &module,
@@ -705,7 +707,7 @@ pub(super) fn infer_unpack_types<'db>(db: &'db dyn Db, unpack: Unpack<'db>) -> U
     let _span = tracing::trace_span!(
         "infer_unpack_types",
         range=?unpack.range(db, &module),
-        file=?python_file.file(db)
+        ?python_file
     )
     .entered();
 

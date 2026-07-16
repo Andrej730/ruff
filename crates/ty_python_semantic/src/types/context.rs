@@ -55,16 +55,18 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
     pub(crate) fn new(
         db: &'db dyn Db,
         scope: ScopeId<'db>,
+        file: File,
         python_file: PythonFile<'db>,
         module: &'ast ParsedModuleRef,
     ) -> Self {
         debug_assert_eq!(scope.python_file(db), python_file);
+        debug_assert_eq!(python_file.file(db), file);
 
         Self {
             db,
             scope,
             module,
-            file: python_file.file(db),
+            file,
             python_file,
             diagnostics: std::cell::RefCell::new(TypeCheckDiagnostics::default()),
             diagnostics_suppressed: false,

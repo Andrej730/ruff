@@ -45,7 +45,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
         module: &'ast ParsedModuleRef,
     ) -> Self {
         Self {
-            context: InferContext::new(db, target_scope, python_file, module),
+            context: InferContext::new(db, target_scope, python_file.file(db), python_file, module),
             targets: FxHashMap::default(),
         }
     }

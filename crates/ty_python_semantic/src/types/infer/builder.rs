@@ -454,13 +454,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn new(
         db: &'db dyn Db,
         region: InferenceRegion<'db>,
+        file: File,
         python_file: PythonFile<'db>,
         index: &'db SemanticIndex<'db>,
         module: &'ast ParsedModuleRef,
     ) -> Self {
         let scope = region.scope(db);
         Self {
-            context: InferContext::new(db, scope, python_file, module),
+            context: InferContext::new(db, scope, file, python_file, module),
             index,
             region,
             scope,
@@ -11104,8 +11105,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_expression_flags: _,
         } = *self;
 
-        let mut builder =
-            TypeInferenceBuilder::new(self.db(), region, self.python_file(), index, self.module());
+        let mut builder = TypeInferenceBuilder::new(
+            self.db(),
+            region,
+            self.file(),
+            self.python_file(),
+            index,
+            self.module(),
+        );
 
         // Speculated builders are often discarded immediately.
         builder.context.defuse();
