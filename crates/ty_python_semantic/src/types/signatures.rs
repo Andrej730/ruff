@@ -5130,11 +5130,13 @@ mod tests {
     use crate::db::tests::{TestDb, setup_db};
     use crate::place::global_symbol;
     use crate::types::{FunctionType, KnownClass, LiteralValueType};
+    use ruff_db::PythonFile;
     use ruff_db::system::DbWithWritableSystem as _;
 
     #[track_caller]
     fn get_function_f<'db>(db: &'db TestDb, file: &'static str) -> FunctionType<'db> {
         let module = ruff_db::files::system_path_to_file(db, file).unwrap();
+        let module = PythonFile::new(db, module, crate::Program::get(db).python_version(db));
         global_symbol(db, module, "f")
             .place
             .expect_type()

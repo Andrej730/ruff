@@ -10,6 +10,7 @@ use crate::types::{
 };
 use crate::{Db, Program};
 use quickcheck::{Arbitrary, Gen};
+use ruff_db::PythonFile;
 use ruff_db::files::system_path_to_file;
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashSet;
@@ -293,6 +294,7 @@ fn divergent(db: &TestDb, id_bits: u64, materialization: Option<MaterializationK
 fn newtype_instance<'db>(db: &'db dyn Db, name: &str) -> Type<'db> {
     let file = system_path_to_file(db, super::setup::PROPERTY_TEST_MODULE_PATH)
         .expect("Property-test module must exist");
+    let file = PythonFile::new(db, file, Program::get(db).python_version(db));
     let Place::Defined(DefinedPlace { ty, .. }) = global_symbol(db, file, name).place else {
         panic!(
             "Expected a global symbol for `{name}` in the property test module, but it was not found"

@@ -1,5 +1,4 @@
 use crate::{
-    Program,
     reachability::is_reachable,
     types::{
         BindingContext, KnownClass, KnownInstanceType, LintDiagnosticGuard, Truthiness, Type,
@@ -769,7 +768,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsTypeVarTuple;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = Program::get(db).python_version(db);
+        let python_version = self.python_version();
         let have_features_from =
             |version: PythonVersion| assume_all_features || python_version >= version;
 
@@ -1031,7 +1030,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsParamSpec;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = Program::get(db).python_version(db);
+        let python_version = self.python_version();
         let have_features_from =
             |version: PythonVersion| assume_all_features || python_version >= version;
 
@@ -1278,7 +1277,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsTypeVar;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = Program::get(db).python_version(db);
+        let python_version = self.python_version();
         let have_features_from =
             |version: PythonVersion| assume_all_features || python_version >= version;
 

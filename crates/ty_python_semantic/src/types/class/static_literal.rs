@@ -11,7 +11,7 @@ use ruff_text_size::{Ranged, TextRange};
 use std::cell::RefCell;
 
 use crate::{
-    Db, FxIndexMap, FxIndexSet, Program, TypeQualifiers,
+    Db, FxIndexMap, FxIndexSet, TypeQualifiers,
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, PublicTypePolicy,
         TypeOrigin, place_from_bindings, place_from_declarations,
@@ -1716,7 +1716,7 @@ impl<'db> StaticClassLiteral<'db> {
                 }
             }
             (field_policy @ CodeGeneratorKind::DataclassLike(_), "__match_args__")
-                if Program::get(db).python_version(db) >= PythonVersion::PY310 =>
+                if self.python_file(db).python_version(db) >= PythonVersion::PY310 =>
             {
                 if !self.has_dataclass_param(db, field_policy, DataclassFlags::MATCH_ARGS) {
                     return None;
@@ -1739,7 +1739,7 @@ impl<'db> StaticClassLiteral<'db> {
                 Some(Type::heterogeneous_tuple(db, match_args))
             }
             (field_policy @ CodeGeneratorKind::DataclassLike(_), "__weakref__")
-                if Program::get(db).python_version(db) >= PythonVersion::PY311 =>
+                if self.python_file(db).python_version(db) >= PythonVersion::PY311 =>
             {
                 if !self.has_dataclass_param(db, field_policy, DataclassFlags::WEAKREF_SLOT)
                     || !self.has_dataclass_param(db, field_policy, DataclassFlags::SLOTS)
@@ -1780,7 +1780,7 @@ impl<'db> StaticClassLiteral<'db> {
                     })
             }
             (CodeGeneratorKind::DataclassLike(_), "__replace__")
-                if Program::get(db).python_version(db) >= PythonVersion::PY313 =>
+                if self.python_file(db).python_version(db) >= PythonVersion::PY313 =>
             {
                 let self_parameter = Parameter::positional_or_keyword(Name::new_static("self"))
                     .with_annotated_type(instance_ty);
@@ -1810,7 +1810,7 @@ impl<'db> StaticClassLiteral<'db> {
                 None
             }
             (field_policy @ CodeGeneratorKind::DataclassLike(_), "__slots__")
-                if Program::get(db).python_version(db) >= PythonVersion::PY310 =>
+                if self.python_file(db).python_version(db) >= PythonVersion::PY310 =>
             {
                 self.has_dataclass_param(db, field_policy, DataclassFlags::SLOTS)
                     .then(|| {
@@ -3196,10 +3196,11 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
             // not considered here, since they don't use field types in their signatures. TODO:
             // ideally we'd have a single source of truth for information about synthesized
             // methods, so we just look them up normally and don't hardcode this knowledge here.
-            let is_frozen_dataclass_prior_to_313 = Program::get(db).python_version(db)
-                <= PythonVersion::PY312
-                && CodeGeneratorKind::from_static_class(db, self)
-                    .is_some_and(|kind| self.has_dataclass_param(db, kind, DataclassFlags::FROZEN));
+            let is_frozen_dataclass_prior_to_313 =
+                class_body_scope.python_file(db).python_version(db) <= PythonVersion::PY312
+                    && CodeGeneratorKind::from_static_class(db, self).is_some_and(|kind| {
+                        self.has_dataclass_param(db, kind, DataclassFlags::FROZEN)
+                    });
 
             if is_namedtuple || is_frozen_dataclass_prior_to_313 {
                 TypeVarVariance::Covariant

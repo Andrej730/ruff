@@ -2,6 +2,7 @@ use super::*;
 use crate::db::tests::{TestDbBuilder, setup_db};
 use crate::place::{typing_extensions_symbol, typing_symbol};
 use crate::types::type_alias::PEP695TypeAliasType;
+use ruff_db::PythonFile;
 use ruff_db::system::DbWithWritableSystem as _;
 use ruff_python_ast as ast;
 use ruff_python_ast::PythonVersion;
@@ -348,6 +349,7 @@ fn type_alias_variance() {
 
     fn get_type_alias<'db>(db: &'db TestDb, name: &str) -> PEP695TypeAliasType<'db> {
         let module = ruff_db::files::system_path_to_file(db, "/src/a.py").unwrap();
+        let module = PythonFile::new(db, module, crate::Program::get(db).python_version(db));
         let ty = global_symbol(db, module, name).place.expect_type();
         let Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::PEP695(
             type_alias,
@@ -504,6 +506,7 @@ fn eager_expansion() {
 
     fn get_type_alias<'db>(db: &'db TestDb, name: &str) -> Type<'db> {
         let module = ruff_db::files::system_path_to_file(db, "/src/a.py").unwrap();
+        let module = PythonFile::new(db, module, crate::Program::get(db).python_version(db));
         let ty = global_symbol(db, module, name).place.expect_type();
         let Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::PEP695(
             type_alias,

@@ -1,7 +1,7 @@
 use super::builder::TypeInferenceBuilder;
 use crate::db::tests::{TestDb, setup_db};
 use crate::place::symbol;
-use crate::place::{ConsideredDefinitions, Place, global_symbol};
+use crate::place::{ConsideredDefinitions, Place, PlaceAndQualifiers};
 use crate::types::{KnownClass, KnownInstanceType, check_types};
 use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Diagnostic, DiagnosticId};
@@ -15,7 +15,11 @@ use ty_python_core::{global_scope, place_table, semantic_index, use_def_map};
 use super::*;
 
 fn python_file(db: &TestDb, file: File) -> PythonFile<'_> {
-    PythonFile::new(db, file, db.python_version())
+    PythonFile::new(db, file, crate::Program::get(db).python_version(db))
+}
+
+fn global_symbol<'db>(db: &'db TestDb, file: File, name: &str) -> PlaceAndQualifiers<'db> {
+    crate::place::global_symbol(db, python_file(db, file), name)
 }
 
 #[track_caller]

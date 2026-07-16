@@ -1947,6 +1947,7 @@ mod tests {
     use crate::types::type_alias::TypeAliasType;
     use crate::types::{KnownClass, KnownInstanceType, Truthiness};
 
+    use ruff_db::PythonFile;
     use ruff_db::system::DbWithWritableSystem as _;
     use ty_module_resolver::KnownModule;
 
@@ -2118,6 +2119,7 @@ mod tests {
         db.write_dedented("/src/a.py", "type Alias = int").unwrap();
 
         let module = ruff_db::files::system_path_to_file(&db, "/src/a.py").unwrap();
+        let module = PythonFile::new(&db, module, crate::Program::get(&db).python_version(&db));
         let alias_ty = global_symbol(&db, module, "Alias").place.expect_type();
         let Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::PEP695(alias))) =
             alias_ty

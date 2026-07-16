@@ -1,6 +1,5 @@
 use itertools::Either;
 use ruff_db::PythonFile;
-use ruff_db::files::File;
 use ruff_index::IndexSlice;
 use ruff_python_ast::PythonVersion;
 use ty_module_resolver::{
@@ -498,10 +497,9 @@ pub(crate) fn explicit_global_symbol<'db>(
 #[allow(unused)]
 pub(crate) fn global_symbol<'db>(
     db: &'db dyn Db,
-    file: File,
+    file: PythonFile<'db>,
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
-    let file = PythonFile::new(db, file, db.python_version());
     explicit_global_symbol(db, file, name)
         .or_fall_back_to(db, || module_type_implicit_global_symbol(db, file, name))
 }
@@ -2255,6 +2253,7 @@ pub(crate) mod implicit_globals {
 /// See <https://docs.python.org/3/reference/datamodel.html#creating-the-class-object>
 pub(crate) fn class_body_implicit_symbol<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
     match name {
@@ -2268,7 +2267,7 @@ pub(crate) fn class_body_implicit_symbol<'db>(
         ))
         .into(),
         // __firstlineno__ was added in Python 3.13
-        "__firstlineno__" if Program::get(db).python_version(db) >= PythonVersion::PY313 => {
+        "__firstlineno__" if python_version >= PythonVersion::PY313 => {
             Place::bound(KnownClass::Int.to_instance(db)).into()
         }
         _ => Place::Undefined.into(),
