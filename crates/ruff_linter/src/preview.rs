@@ -264,13 +264,6 @@ pub(crate) const fn is_enumerate_for_loop_int_index_enabled(settings: &LinterSet
     settings.preview.is_enabled()
 }
 
-// https://github.com/astral-sh/ruff/pull/21469
-pub(crate) const fn is_s310_resolve_string_literal_bindings_enabled(
-    settings: &LinterSettings,
-) -> bool {
-    settings.preview.is_enabled()
-}
-
 // https://github.com/astral-sh/ruff/pull/22057
 pub(crate) const fn is_ble001_exc_info_suppression_enabled(settings: &LinterSettings) -> bool {
     settings.preview.is_enabled()
