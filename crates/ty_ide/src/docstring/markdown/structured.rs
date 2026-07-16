@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 
+use ruff_python_trivia::Cursor;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use strum::IntoEnumIterator;
 
 use super::general;
 use crate::docstring::document::SectionKind;
 use crate::docstring::document::preformatted::MarkdownFence;
-use crate::docstring::document::syntax::{is_markdown_code_span, starts_with_markdown_list_item};
+use crate::docstring::document::syntax::{
+    BacktickFragment, BacktickFragments, is_markdown_code_span, starts_with_markdown_list_item,
+};
 
 mod google;
 mod rst;
@@ -375,7 +378,90 @@ fn render_type_code_span_into(output: &mut String, ty: &str) {
         return;
     }
 
+    let normalized = normalize_embedded_type_markup(&normalized);
     render_code_span_into(output, normalized.as_ref());
+}
+
+/// Removes source markup that would otherwise become literal inside an outer code span.
+fn normalize_embedded_type_markup(ty: &str) -> Cow<'_, str> {
+    if !ty.contains('`') && !ty.contains('\\') {
+        return Cow::Borrowed(ty);
+    }
+
+    let mut normalized = String::with_capacity(ty.len());
+    let mut fragments = BacktickFragments::new(ty).peekable();
+    while let Some(fragment) = fragments.next() {
+        match fragment {
+            BacktickFragment::Text(text) => {
+                // An explicit reStructuredText role belongs to the interpreted-text span that
+                // immediately follows it. Remove only that trailing portion of the plain text.
+                let text_without_role =
+                    if matches!(fragments.peek(), Some(BacktickFragment::Span(_))) {
+                        strip_rest_role(text).unwrap_or(text)
+                    } else {
+                        text
+                    };
+                push_unescaped(&mut normalized, text_without_role);
+            }
+            BacktickFragment::Span(span) => {
+                let markup = span.content();
+                // A single-backtick span can be reStructuredText interpreted text, where a
+                // leading `~` requests an abbreviated label. Longer delimiters are Markdown code
+                // spans and preserve any shorter backtick runs in their contents.
+                let display_text = if span.is_single() {
+                    interpreted_text_label(markup)
+                } else {
+                    markup
+                };
+                push_unescaped(&mut normalized, display_text);
+            }
+        }
+    }
+
+    Cow::Owned(normalized)
+}
+
+/// Returns `text` without a trailing reStructuredText role.
+fn strip_rest_role(text: &str) -> Option<&str> {
+    let mut cursor = Cursor::new(text);
+    if !cursor.eat_char_back(':') {
+        return None;
+    }
+
+    let mut role_starts_with_colon = false;
+    let mut role_contains_alphanumeric = false;
+    cursor.eat_back_while(|character| {
+        let is_role_character =
+            character.is_alphanumeric() || matches!(character, '-' | '.' | '_' | '+' | ':');
+        if is_role_character {
+            role_starts_with_colon = character == ':';
+            role_contains_alphanumeric |= character.is_alphanumeric();
+        }
+        is_role_character
+    });
+
+    (role_starts_with_colon && role_contains_alphanumeric).then_some(cursor.as_str())
+}
+
+/// Returns the abbreviated label from reStructuredText interpreted text prefixed by `~`.
+fn interpreted_text_label(text: &str) -> &str {
+    let Some(target) = text.strip_prefix('~').filter(|target| !target.is_empty()) else {
+        return text;
+    };
+    target.rsplit_once('.').map_or(target, |(_, label)| label)
+}
+
+fn push_unescaped(output: &mut String, text: &str) {
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\\'
+            && let Some(escaped) = characters.next_if(char::is_ascii_punctuation)
+        {
+            output.push(escaped);
+        } else {
+            output.push(character);
+        }
+    }
 }
 
 /// Normalizes type text so it fits in a single Markdown code span.
@@ -598,6 +684,53 @@ mod tests {
 
         **&lt;value&gt; &amp; \[docs\](target) \| \~deleted\~**<HB>
         Escaped name.
+        ");
+    }
+
+    #[test]
+    fn section_items_normalize_source_markup_in_types() {
+        let _snap = bind_markdown_snapshot_filters();
+        let section = section_block(vec![
+            SectionItem::new(
+                SectionKind::Parameters,
+                Some("rng"),
+                Some("{None, int, `numpy.random.Generator`, `numpy.random.RandomState`}, optional"),
+                "Random number generator.",
+            ),
+            SectionItem::new(
+                SectionKind::Parameters,
+                Some("arrowstyle"),
+                Some(r"str (default='-\|>')"),
+                "Arrow style.",
+            ),
+        ]);
+
+        assert_snapshot!(render_markdown(&section), @"
+        ## Parameters
+        **rng**: `{None, int, numpy.random.Generator, numpy.random.RandomState}, optional`<HB>
+        Random number generator.
+
+        **arrowstyle**: `str (default='-|>')`<HB>
+        Arrow style.
+        ");
+    }
+
+    #[test]
+    fn section_items_remove_rest_roles_from_types() {
+        let _snap = bind_markdown_snapshot_filters();
+        let section = section_block(vec![SectionItem::new(
+            SectionKind::Parameters,
+            Some("colormap"),
+            Some(
+                "str or :class:`~matplotlib.colors.Colormap` or :mod:`matplotlib.colors` or `~pandas.Index`",
+            ),
+            "Color mapping.",
+        )]);
+
+        assert_snapshot!(render_markdown(&section), @"
+        ## Parameters
+        **colormap**: `str or Colormap or matplotlib.colors or Index`<HB>
+        Color mapping.
         ");
     }
 
