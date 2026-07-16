@@ -102,7 +102,7 @@ impl InlayHint {
                             .as_deref()
                             .unwrap_or(&details.label[start..end]);
 
-                        let module = file_to_module(db, definition_file)?;
+                        let module = file_to_module(db, definition.python_file(db))?;
 
                         if should_skip_import(db, module, *ty) {
                             return None;

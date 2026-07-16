@@ -832,6 +832,7 @@ mod tests {
     use ruff_db::files::FileRootKind;
     use ruff_db::system::{SystemPathBuf, TestSystem};
     use ty_module_resolver::list_modules;
+    use ty_python_core::program::Program;
 
     use crate::{ProjectDatabase, ProjectMetadata};
 
@@ -877,7 +878,7 @@ mod tests {
         let metadata = ProjectMetadata::discover(&project, &system)?;
         let db = ProjectDatabase::fallible(metadata, system)?;
 
-        let modules = list_modules(&db);
+        let modules = list_modules(&db, Program::get(&db).python_version(&db));
         assert!(
             modules
                 .iter()

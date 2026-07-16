@@ -77,7 +77,7 @@ pub fn unused_bindings(db: &dyn Db, file: PythonFile<'_>) -> Box<[UnusedBinding]
     let source_file = file.file(db);
     let parsed = parsed_module(db, file).load(db);
     let is_stub_file = source_file.is_stub(db);
-    let index = semantic_index(db, source_file);
+    let index = semantic_index(db, file);
     let mut unused = Vec::new();
 
     for scope_id in index.scope_ids() {

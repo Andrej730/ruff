@@ -305,11 +305,7 @@ impl Workspace {
     }
 
     pub fn format(&self, file_id: &FileHandle) -> Result<Option<String>, Error> {
-        formatted_file(
-            &self.db,
-            PythonFile::new(&self.db, file_id.file, self.db.python_version()),
-        )
-        .map_err(into_error)
+        formatted_file(&self.db, file_id.file).map_err(into_error)
     }
 
     /// Returns the token stream for `path` serialized as a string.

@@ -1365,10 +1365,9 @@ fn analyze_single(db: &dyn Db, predicate: &Predicate) -> Truthiness {
                 None => None,
             };
 
-            let referenced_file = python_file.file(db);
             match imported_symbol(
                 db,
-                Some(referenced_file),
+                Some(python_file),
                 symbol.name(),
                 requires_explicit_reexport,
             )
@@ -1600,8 +1599,10 @@ impl<'db> DeclarationsIteratorExtension<'db> for DeclarationsIterator<'_, 'db> {
 mod tests {
     use super::*;
     use crate::db::tests::setup_db;
+    use ruff_db::PythonFile;
     use ruff_db::files::system_path_to_file;
     use ruff_db::system::DbWithWritableSystem as _;
+    use ty_module_resolver::Db as _;
     use ty_python_core::narrowing_constraints::InteriorNode;
     use ty_python_core::predicate::Predicates;
     use ty_python_core::semantic_index;
@@ -1625,7 +1626,7 @@ mod tests {
                 )?;
 
                 let file = system_path_to_file(&db, "/src/test.py").unwrap();
-                let index = semantic_index(&db, file);
+                let index = semantic_index(&db, PythonFile::new(&db, file, db.python_version()));
                 let function_scope = index.child_scopes(FileScopeId::global()).next().unwrap().0;
                 let use_def = index.use_def_map(function_scope);
                 let predicate = use_def
