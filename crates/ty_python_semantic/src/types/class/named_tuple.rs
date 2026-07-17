@@ -4,7 +4,7 @@ use ruff_python_ast::{NodeIndex, PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::{
-    Db, Program,
+    Db,
     place::{Place, PlaceAndQualifiers},
     types::{
         BindingContext, BoundTypeVarInstance, ClassBase, ClassLiteral, ClassType, GenericContext,
@@ -24,6 +24,7 @@ use ty_python_core::{definition::Definition, scope::ScopeId};
 /// generic context in the synthesized `__new__` signature.
 pub(super) fn synthesize_namedtuple_class_member<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     name: &str,
     instance_ty: Type<'db>,
     fields: impl Iterator<Item = NamedTupleField<'db>>,
@@ -63,7 +64,7 @@ pub(super) fn synthesize_namedtuple_class_member<'db>(
             Some(Type::function_like_callable(db, signature))
         }
         "__match_args__" => {
-            if Program::get(db).python_version(db) < PythonVersion::PY310 {
+            if python_version < PythonVersion::PY310 {
                 return None;
             }
 
@@ -81,7 +82,7 @@ pub(super) fn synthesize_namedtuple_class_member<'db>(
             Some(Type::empty_tuple(db))
         }
         "_replace" | "__replace__" => {
-            if name == "__replace__" && Program::get(db).python_version(db) < PythonVersion::PY313 {
+            if name == "__replace__" && python_version < PythonVersion::PY313 {
                 return None;
             }
 
@@ -409,6 +410,7 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
 
         let result = synthesize_namedtuple_class_member(
             db,
+            self.scope(db).python_file(db).python_version(db),
             name,
             instance_ty,
             self.fields(db).iter().cloned(),

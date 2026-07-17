@@ -4520,7 +4520,7 @@ pub(super) fn hint_if_stdlib_submodule_exists_on_other_versions(
         return false;
     };
 
-    let python_version = program.python_version(db);
+    let python_version = parent_module.python_version(db);
     if version_range.contains(python_version) {
         return false;
     }

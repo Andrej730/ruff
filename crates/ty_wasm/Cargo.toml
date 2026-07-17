@@ -24,7 +24,6 @@ test = false
 
 [dependencies]
 ty_ide = { workspace = true }
-ty_module_resolver = { workspace = true }
 ty_project = { workspace = true, default-features = false, features = [
     "deflate",
     "format",

@@ -1664,6 +1664,7 @@ impl<'db> StaticClassLiteral<'db> {
                 });
                 synthesize_namedtuple_class_member(
                     db,
+                    self.python_file(db).python_version(db),
                     name,
                     instance_ty,
                     fields_iter,

@@ -117,7 +117,7 @@ use crate::types::{
     extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
     is_discarded_dict_key_assignment, todo_type,
 };
-use crate::{AnalysisSettings, Db, FxIndexSet, Program};
+use crate::{AnalysisSettings, Db, FxIndexSet};
 use ty_python_core::ast_ids::ScopedUseId;
 use ty_python_core::definition::{
     AnnotatedAssignmentDefinitionKind, AssignmentDefinitionKind, ComprehensionDefinitionKind,
@@ -858,7 +858,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn defer_annotations(&self) -> bool {
         self.index.has_future_annotations()
             || self.in_stub()
-            || Program::get(self.db()).python_version(self.db()) >= PythonVersion::PY314
+            || self.python_version() >= PythonVersion::PY314
     }
 
     /// Are we currently in a context where name resolution should be deferred
@@ -9753,7 +9753,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // ===
         // We don't need to check for typing_extensions.Type,
         // because it's already caught by typing.Type.
-        if Program::get(self.db()).python_version(self.db()) >= PythonVersion::PY39 {
+        if self.python_version() >= PythonVersion::PY39 {
             if let Some(("", builtin_name)) = as_pep_585_generic("typing", id) {
                 diagnostic.set_primary_message(format_args!("Did you mean `{builtin_name}`?"));
             }

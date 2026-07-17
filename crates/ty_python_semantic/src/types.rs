@@ -4754,6 +4754,7 @@ impl<'db> Type<'db> {
                 .into(),
 
                 Some(KnownFunction::Dataclass) => {
+                    let python_version = function_type.python_file(db).python_version(db);
                     let bool_parameter = |name: &'static str, default: bool| {
                         Parameter::keyword_only(Name::new_static(name))
                             .with_annotated_type(KnownClass::Bool.to_instance(db))
@@ -4769,7 +4770,7 @@ impl<'db> Type<'db> {
                         bool_parameter("frozen", false),
                     ];
 
-                    if Program::get(db).python_version(db) >= ast::PythonVersion::PY310 {
+                    if python_version >= ast::PythonVersion::PY310 {
                         decorator_factory_parameters.extend([
                             bool_parameter("match_args", true),
                             bool_parameter("kw_only", false),
@@ -4777,7 +4778,7 @@ impl<'db> Type<'db> {
                         ]);
                     }
 
-                    if Program::get(db).python_version(db) >= ast::PythonVersion::PY311 {
+                    if python_version >= ast::PythonVersion::PY311 {
                         decorator_factory_parameters.push(bool_parameter("weakref_slot", false));
                     }
 

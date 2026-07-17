@@ -76,7 +76,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 for module_name in module_name.ancestors() {
                     if let Some(version_range) = typeshed_versions.exact(&module_name) {
                         // We know it is a stdlib module on *some* Python versions...
-                        let python_version = program.python_version(db);
+                        let python_version = self.python_version();
                         if !version_range.contains(python_version) {
                             // ...But not on *this* Python version.
                             diagnostic.info(format_args!(

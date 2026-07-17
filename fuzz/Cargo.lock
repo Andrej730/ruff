@@ -1801,6 +1801,7 @@ version = "0.0.4"
 dependencies = [
  "bitflags 2.13.0",
  "bstr",
+ "drop_bomb",
  "get-size2",
  "memchr",
  "ruff_python_ast",
