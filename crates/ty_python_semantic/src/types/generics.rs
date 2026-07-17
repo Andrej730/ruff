@@ -2096,17 +2096,14 @@ impl<'db> TypeVarInference<'db> {
     /// Returns `true` if inference solved every type variable from this context that appears in
     /// `ty`.
     pub(crate) fn is_complete_for(self, db: &'db dyn Db, ty: Type<'db>) -> bool {
-        let unsolved: FxHashSet<_> = self
-            .generic_context(db)
-            .variables_inner(db)
-            .keys()
-            .zip(self.types(db))
-            .filter_map(|(identity, inferred)| inferred.is_none().then_some(*identity))
-            .collect();
+        let variables = self.generic_context(db).variables_inner(db);
+        let inferred = self.types(db);
         let mut complete = true;
         ty.visit_specialization(db, |nested, _| {
             if let Type::TypeVar(typevar) = nested
-                && unsolved.contains(&typevar.identity(db))
+                && variables
+                    .get_index_of(&typevar.identity(db))
+                    .is_some_and(|index| inferred[index].is_none())
             {
                 complete = false;
             }
@@ -2160,7 +2157,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         generic_context: GenericContext<'db>,
         mut choose: impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
     ) -> Specialization<'db> {
-        let types = self.solve_pending_with(generic_context, &mut choose);
+        let types = self
+            .solve_pending_with(generic_context, &mut choose)
+            .unwrap_or_else(|()| self.solve_hash_map_with(generic_context, &mut choose));
         let specialization =
             generic_context
                 .variables_inner(self.db)
@@ -2176,12 +2175,42 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     }
 
     /// Build raw type-variable inference, preserving which type variables were left unsolved.
+    ///
+    /// Returns an error if the call-wide pending constraints are unsatisfiable.
     pub(crate) fn build_inference_with(
         &mut self,
         generic_context: GenericContext<'db>,
         mut choose: impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
+    ) -> Result<TypeVarInference<'db>, ()> {
+        let types = self.solve_pending_with(generic_context, &mut choose)?;
+        Ok(self.typevar_inference(generic_context, &types))
+    }
+
+    /// Build a diagnostic specialization after the call-wide constraints were unsatisfiable.
+    ///
+    /// Each argument relation is solved independently, then its solutions are merged into the
+    /// legacy type map. This preserves enough information to report the conflicting arguments
+    /// even when a migrated inference path only populated `pending`.
+    pub(crate) fn build_diagnostic_inference_with(
+        &mut self,
+        generic_context: GenericContext<'db>,
+        argument_relations: impl IntoIterator<Item = (Type<'db>, Type<'db>)>,
+        mut choose: impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
     ) -> TypeVarInference<'db> {
-        let types = self.solve_pending_with(generic_context, &mut choose);
+        for (formal, actual) in argument_relations {
+            let when = actual.when_constraint_set_assignable_to(self.db, formal, self.constraints);
+            let _ = self.add_type_mappings_from_constraint_set(when);
+        }
+
+        let types = self.solve_hash_map_with(generic_context, &mut choose);
+        self.typevar_inference(generic_context, &types)
+    }
+
+    fn typevar_inference(
+        &self,
+        generic_context: GenericContext<'db>,
+        types: &FxHashMap<BoundTypeVarIdentity<'db>, Type<'db>>,
+    ) -> TypeVarInference<'db> {
         let inferred: Box<[_]> = generic_context
             .variables_inner(self.db)
             .keys()
@@ -2212,19 +2241,8 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             return None;
         }
 
-        let Solutions::Constrained(solutions) = self.pending.solutions_with(
-            self.db,
-            self.constraints,
-            self.inferable,
-            |_variance, path_bound| {
-                let typevar = path_bound.bound_typevar;
-                if let Some(ty) = choose(typevar, Some(path_bound)) {
-                    return Ok(Some(ty));
-                }
-
-                PathBounds::default_solve(self.db, self.constraints, path_bound)
-            },
-        ) else {
+        let Solutions::Constrained(solutions) = self.solve_pending_constraints_with(&mut choose)
+        else {
             return None;
         };
 
@@ -2261,18 +2279,38 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         (!inferences.is_empty()).then(|| inferences.into_boxed_slice())
     }
 
+    pub(crate) fn has_actual_intersection_constraint(&self) -> bool {
+        self.has_actual_intersection_constraint
+    }
+
+    fn solve_pending_constraints_with(
+        &self,
+        choose: &mut impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
+    ) -> Solutions<'db> {
+        self.pending.solutions_with(
+            self.db,
+            self.constraints,
+            self.inferable,
+            |_variance, path_bound| {
+                // A projection choice must not turn an invalid path into a satisfiable one.
+                let solution = PathBounds::default_solve(self.db, self.constraints, path_bound)?;
+                Ok(choose(path_bound.bound_typevar, Some(path_bound)).or(solution))
+            },
+        )
+    }
+
     fn solve_pending_with(
         &mut self,
         generic_context: GenericContext<'db>,
         choose: &mut impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
-    ) -> FxHashMap<BoundTypeVarIdentity<'db>, Type<'db>> {
+    ) -> Result<FxHashMap<BoundTypeVarIdentity<'db>, Type<'db>>, ()> {
         // TODO: Move `ParamSpec` and `TypeVarTuple` handling to the new constraint solver.
-        if generic_context
+        let has_legacy_variadic = generic_context
             .variables_inner(self.db)
             .values()
-            .any(|typevar| typevar.is_paramspec(self.db) || typevar.is_typevartuple(self.db))
-        {
-            return self.solve_hash_map_with(generic_context, choose);
+            .any(|typevar| typevar.is_paramspec(self.db) || typevar.is_typevartuple(self.db));
+        if has_legacy_variadic && !self.has_actual_intersection_constraint {
+            return Ok(self.solve_hash_map_with(generic_context, choose));
         }
 
         // TODO: This projection / solve can be expensive for large-union collection-literal type
@@ -2287,24 +2325,17 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         // was not enough: `solutions_with` still performed the expensive path traversal, and the
         // skipped projection changed precision in LiteralString tests. See the
         // `ty_micro[pydantic_core_schema_dict]` benchmark for a minimized reproducer.
-        let solutions = match self.pending.solutions_with(
-            self.db,
-            self.constraints,
-            self.inferable,
-            |_variance, path_bound| {
-                let typevar = path_bound.bound_typevar;
-                if let Some(ty) = choose(typevar, Some(path_bound)) {
-                    return Ok(Some(ty));
-                }
-
-                PathBounds::default_solve(self.db, self.constraints, path_bound)
-            },
-        ) {
-            Solutions::Unsatisfiable | Solutions::Unconstrained => {
-                return self.solve_hash_map_with(generic_context, choose);
+        let solutions = match self.solve_pending_constraints_with(choose) {
+            Solutions::Unsatisfiable => return Err(()),
+            Solutions::Unconstrained => {
+                return Ok(self.solve_hash_map_with(generic_context, choose));
             }
             Solutions::Constrained(solutions) => solutions,
         };
+
+        if has_legacy_variadic {
+            return Ok(self.solve_hash_map_with(generic_context, choose));
+        }
 
         let mut types = FxHashMap::default();
         for solution in solutions {
@@ -2342,9 +2373,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         {
             // Recursive specialization cannot reach a fixed point when a cycle grows through an
             // embedded generic type, such as `SupportsAdd[T, S]`.
-            self.solve_hash_map_with(generic_context, choose)
+            Ok(self.solve_hash_map_with(generic_context, choose))
         } else {
-            types
+            Ok(types)
         }
     }
 
@@ -2728,30 +2759,16 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     fn add_type_mappings_from_constraint_set(
         &mut self,
         set: ConstraintSet<'db, 'c>,
-    ) -> Result<(), ConstraintSetInferenceError<'db>> {
-        let mut first_typevar_error = None;
+    ) -> Result<(), ()> {
         let solutions = match set.solutions_with(
             self.db,
             self.constraints,
             self.inferable,
             |_variance, path_bound| {
-                let solution = PathBounds::default_solve(self.db, self.constraints, path_bound);
-                if solution.is_err() && first_typevar_error.is_none() {
-                    first_typevar_error = Self::specialization_error_from_failed_bounds(
-                        self.db,
-                        self.constraints,
-                        path_bound,
-                    );
-                }
-                solution
+                PathBounds::default_solve(self.db, self.constraints, path_bound)
             },
         ) {
-            Solutions::Unsatisfiable => {
-                return Err(first_typevar_error.map_or(
-                    ConstraintSetInferenceError::Unsatisfiable,
-                    ConstraintSetInferenceError::TypeVarViolation,
-                ));
-            }
+            Solutions::Unsatisfiable => return Err(()),
             Solutions::Unconstrained => return Ok(()),
             Solutions::Constrained(solutions) => solutions,
         };
@@ -2937,8 +2954,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let when = actual_callable
                     .signatures(self.db)
                     .when_constraint_set_assignable_to(self.db, formal_signature, self.constraints);
-                self.add_type_mappings_from_constraint_set(when)
-                    .map_err(|_| ())?;
+                self.add_type_mappings_from_constraint_set(when)?;
                 self.pending.intersect(self.db, self.constraints, when);
             } else {
                 // An overloaded actual callable is compatible with the formal signature if at
