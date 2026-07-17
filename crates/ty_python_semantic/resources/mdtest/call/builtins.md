@@ -480,12 +480,12 @@ import re
 
 def _(s: Unknown | str):
     escaped = map(re.escape, s)
-    reveal_type(escaped)  # revealed: map[str]
+    reveal_type(escaped)  # revealed: map[Unknown | str]
     "".join(escaped)
 
 def _(xs: Unknown | list[str]):
     escaped = map(re.escape, xs)
-    reveal_type(escaped)  # revealed: map[str]
+    reveal_type(escaped)  # revealed: map[Unknown | str]
     tokens: list[Unknown | str] = []
     tokens.extend(escaped)
 ```

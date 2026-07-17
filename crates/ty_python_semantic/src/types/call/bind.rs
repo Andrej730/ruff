@@ -2770,7 +2770,7 @@ impl<'db> Bindings<'db> {
                         let result = constraints.into_owned(|constraints| {
                             let lhs = constraints.load(db, tracked.constraints(db));
                             let rhs = constraints.load(db, other.constraints(db));
-                            lhs.implies(db, constraints, || rhs)
+                            lhs.implies(db, constraints, rhs)
                         });
                         let tracked = InternedConstraintSet::new(db, result);
                         overload.set_return_type(Type::KnownInstance(
@@ -3525,7 +3525,7 @@ impl<'db> CallableBinding<'db> {
                             constraints,
                             overload.inferable_typevars,
                         )
-                        .is_always_satisfied(db)
+                        .is_gradually_satisfied(db)
                     {
                         is_argument_assignable_to_any_overload = true;
                         break 'overload;
@@ -4986,7 +4986,7 @@ fn validate_keyword_unpack_key_type<'db>(
             constraints,
             inferable_typevars,
         )
-        .is_always_satisfied(db)
+        .is_gradually_satisfied(db)
     {
         KeywordUnpackKeyTypeCheck::Valid
     } else {

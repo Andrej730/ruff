@@ -2966,7 +2966,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                         }
                         if !ty
                             .when_assignable_to(self.db, bound, self.constraints, self.inferable)
-                            .is_always_satisfied(self.db)
+                            .is_gradually_satisfied(self.db)
                         {
                             return Err(SpecializationError::MismatchedBound {
                                 bound_typevar,
@@ -3024,7 +3024,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                                         self.constraints,
                                         self.inferable,
                                     )
-                                    .is_always_satisfied(self.db)
+                                    .is_gradually_satisfied(self.db)
                             } else {
                                 ty.when_assignable_to(
                                     self.db,
@@ -3032,7 +3032,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                                     self.constraints,
                                     self.inferable,
                                 )
-                                .is_always_satisfied(self.db)
+                                .is_gradually_satisfied(self.db)
                             };
 
                             if is_satisfied {
@@ -3336,7 +3336,15 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let when = self
                     .common_typed_dict_protocol_constraints(formal, actual_union)
                     .unwrap_or_else(|| {
-                        actual.when_constraint_set_assignable_to(self.db, formal, self.constraints)
+                        actual.has_relation_to_with_options(
+                            self.db,
+                            formal,
+                            self.constraints,
+                            self.inferable,
+                            TypeRelation::Assignability,
+                            TypeVarEvaluation::Lazy,
+                            GradualEvaluation::Lazy,
+                        )
                     });
                 self.infer_from_protocol_constraint_set(when);
                 return Ok(());

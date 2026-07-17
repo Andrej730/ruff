@@ -97,8 +97,8 @@ def _[T]() -> None:
     ConstraintSet.range(Base, T, Base)
 ```
 
-Constraints can only refer to fully static types, so the lower and upper bounds are transformed into
-their bottom and top materializations, respectively.
+Gradual lower and upper bounds are transformed into their bottom and top materializations,
+respectively.
 
 ```py
 def _[T]() -> None:
@@ -187,8 +187,8 @@ def _[T]() -> None:
     ~ConstraintSet.range(Base, T, Base)
 ```
 
-Constraints can only refer to fully static types, so the lower and upper bounds are transformed into
-their bottom and top materializations, respectively.
+Gradual lower and upper bounds are transformed into their bottom and top materializations,
+respectively.
 
 ```pyi
 def _[T]() -> None:
@@ -909,6 +909,66 @@ def quantifier_order[S, T]() -> None:
     forall_target = equal.for_all(tuple[T])
     exists_source_forall_target = ~((~forall_target).for_all(tuple[S]))
     static_assert(exists_source_forall_target == ConstraintSet.never())
+```
+
+## Gradual constraints
+
+Constraint-set assignability preserves graduality. Constraints on a gradual type's materialization
+are neither always nor never satisfied, while constraints on inferable type variables are retained.
+
+```py
+from typing import Any
+from ty_extensions import static_assert
+from ty_extensions._internal import (
+    ConstraintSet,
+    is_assignable_to,
+    is_constraint_set_assignable_to,
+)
+
+gradual = is_constraint_set_assignable_to(Any, int)
+
+# revealed: ConstraintSet[bool]
+reveal_type(gradual)
+
+# revealed: ConstraintSet[gradual]
+reveal_type(gradual.with_detailed_display())
+
+static_assert(gradual == gradual)
+static_assert(gradual != ConstraintSet.always())
+static_assert(gradual != ConstraintSet.never())
+static_assert(gradual.satisfies(gradual))
+static_assert((gradual | ConstraintSet.never()) == gradual)
+static_assert((ConstraintSet.never() | gradual) == gradual)
+static_assert((gradual & ConstraintSet.always()) == gradual)
+static_assert((ConstraintSet.always() & gradual) == gradual)
+static_assert(~gradual == gradual)
+static_assert(gradual)
+static_assert(is_assignable_to(Any, int))
+
+def _[T]() -> None:
+    informative = ConstraintSet.range(int, T, object)
+    static_assert((gradual | informative) == informative)
+    static_assert((informative | gradual) == informative)
+    static_assert((gradual & informative) == informative)
+    static_assert((informative & gradual) == informative)
+```
+
+Constraint implication uses subtyping rather than assignability. Types that are only assignable
+through dynamic bases cannot establish an implication between ranges.
+
+```py
+from typing import Any
+from ty_extensions import static_assert
+from ty_extensions._internal import ConstraintSet
+
+class A(Any): ...
+class B(Any): ...
+
+def _[T]() -> None:
+    a = ConstraintSet.range(A, T, A)
+    b = ConstraintSet.range(B, T, B)
+    static_assert(not a.satisfies(b))
+    static_assert(not b.satisfies(a))
 ```
 
 ## Displaying constraints

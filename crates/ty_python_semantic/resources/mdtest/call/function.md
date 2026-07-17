@@ -195,6 +195,16 @@ class RecursiveProtocol[T](Protocol):
 def recursive_protocol[T](value: RecursiveProtocol[T]) -> T:
     raise NotImplementedError
 
+class Box[T](Protocol):
+    @property
+    def value(self) -> T: ...
+
+class AnyBox:
+    value: Any
+
+def unbox[T](value: Box[T]) -> T:
+    raise NotImplementedError
+
 class Invariant[T]:
     value: T
 
@@ -218,6 +228,7 @@ def _(x: Any, callback: Any):
     reveal_type(g_optional(x))  # revealed: Any
     reveal_type(g_iterable(x))  # revealed: Any
     reveal_type(recursive_protocol(x))  # revealed: Any
+    reveal_type(unbox(AnyBox()))  # revealed: Any
     reveal_type(invariant(x))  # revealed: Any
     reveal_type(consume(callback, 1))  # revealed: Literal[1]
     reveal_type(produce(callback, 1))  # revealed: Any | Literal[1]

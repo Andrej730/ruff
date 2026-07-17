@@ -2750,6 +2750,8 @@ def set_and_get(value: SetAndGet[Key, Value], key: Key, item: Value) -> Value:
 
 def takes_int(value: int) -> None: ...
 def _(value: CorrelatedA | CorrelatedB) -> None:
+    # TODO: This is a false positive caused by independently solving redundant constraint paths.
+    # error: [invalid-argument-type] "Expected `int`, found `object`"
     takes_int(set_and_get(value, "a", 1))
 ```
 

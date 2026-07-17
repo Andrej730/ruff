@@ -442,14 +442,24 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
         debug_assert!(std::ptr::eq(self.builder, builder));
     }
 
-    /// Returns whether this constraint set never holds
+    /// Returns whether this constraint set never holds.
+    ///
+    /// `GRADUAL` is not never satisfied.
     pub(crate) fn is_never_satisfied(self, db: &'db dyn Db) -> bool {
         self.node.is_never_satisfied(db, self.builder)
     }
 
-    /// Returns whether this constraint set always holds
+    /// Returns whether this constraint set always holds.
+    ///
+    /// `GRADUAL` is not always satisfied.
     pub(crate) fn is_always_satisfied(self, db: &'db dyn Db) -> bool {
         self.node.is_always_satisfied(db, self.builder)
+    }
+
+    /// Returns whether this constraint set always holds after accepting gradual materialization
+    /// constraints.
+    pub(crate) fn is_gradually_satisfied(self, db: &'db dyn Db) -> bool {
+        self.node.is_gradually_satisfied(db, self.builder)
     }
 
     /// Returns the constraints under which `lhs` is a subtype of `rhs`, assuming that the
@@ -574,11 +584,13 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
     /// nodes.
     pub(crate) fn implies(
         self,
-        db: &'db dyn Db,
+        _db: &'db dyn Db,
         builder: &'c ConstraintSetBuilder<'db>,
-        other: impl FnOnce() -> Self,
+        other: Self,
     ) -> Self {
-        self.negate(db, builder).or(db, builder, other)
+        self.verify_builder(builder);
+        other.verify_builder(builder);
+        Self::from_node(builder, self.node.implies(builder, other.node))
     }
 
     /// Returns a constraint set encoding that this constraint set is equivalent to another.
@@ -1994,14 +2006,20 @@ impl ConstraintId {
         {
             return false;
         }
-        other_constraint
-            .bounds
-            .materialized_lower()
-            .is_constraint_set_assignable_to(db, self_constraint.bounds.materialized_lower())
-            && self_constraint
-                .bounds
-                .materialized_upper()
-                .is_constraint_set_assignable_to(db, other_constraint.bounds.materialized_upper())
+
+        let lower =
+            |bounds: ConstraintBounds<'db>| bounds.materialized_lower().bottom_materialization(db);
+        let upper =
+            |bounds: ConstraintBounds<'db>| bounds.materialized_upper().top_materialization(db);
+        builder.cached_is_constraint_set_subtype_of(
+            db,
+            lower(other_constraint.bounds),
+            lower(self_constraint.bounds),
+        ) && builder.cached_is_constraint_set_subtype_of(
+            db,
+            upper(self_constraint.bounds),
+            upper(other_constraint.bounds),
+        )
     }
 
     /// Returns the intersection of two range constraints, or `None` if the intersection is empty.
@@ -2450,13 +2468,32 @@ impl NodeId {
         db: &'db dyn Db,
         builder: &ConstraintSetBuilder<'db>,
     ) -> bool {
+        self.is_always_satisfied_with(db, builder, false)
+    }
+
+    /// Returns whether this BDD represents the constant function `true` after accepting gradual
+    /// materialization constraints.
+    fn is_gradually_satisfied<'db>(
+        self,
+        db: &'db dyn Db,
+        builder: &ConstraintSetBuilder<'db>,
+    ) -> bool {
+        self.is_always_satisfied_with(db, builder, true)
+    }
+
+    fn is_always_satisfied_with<'db>(
+        self,
+        db: &'db dyn Db,
+        builder: &ConstraintSetBuilder<'db>,
+        gradual_satisfied: bool,
+    ) -> bool {
         match self.node() {
             Node::AlwaysTrue => true,
             Node::AlwaysFalse => false,
-            Node::Gradual => false,
+            Node::Gradual => gradual_satisfied,
             Node::Interior(interior) => {
                 let mut path = interior.path_assignments(builder);
-                self.is_always_satisfied_inner(db, builder, &mut path)
+                self.is_always_satisfied_inner(db, builder, &mut path, gradual_satisfied)
             }
         }
     }
@@ -2466,11 +2503,12 @@ impl NodeId {
         db: &'db dyn Db,
         builder: &ConstraintSetBuilder<'db>,
         path: &mut PathAssignments,
+        gradual_satisfied: bool,
     ) -> bool {
         match self.node() {
             Node::AlwaysTrue => true,
             Node::AlwaysFalse => false,
-            Node::Gradual => false,
+            Node::Gradual => gradual_satisfied,
             Node::Interior(_) => {
                 // walk_edge will return None if this node's constraint (or anything we can derive
                 // from it) causes the if_true edge to become impossible. We want to ignore
@@ -2489,7 +2527,14 @@ impl NodeId {
                         builder,
                         interior.constraint.when_true(),
                         interior.source_order,
-                        |path, _| if_true_or_uncertain.is_always_satisfied_inner(db, builder, path),
+                        |path, _| {
+                            if_true_or_uncertain.is_always_satisfied_inner(
+                                db,
+                                builder,
+                                path,
+                                gradual_satisfied,
+                            )
+                        },
                     )
                     .unwrap_or(true);
                 if !true_always_satisfied {
@@ -2503,7 +2548,14 @@ impl NodeId {
                     builder,
                     interior.constraint.when_false(),
                     interior.source_order,
-                    |path, _| if_false_or_uncertain.is_always_satisfied_inner(db, builder, path),
+                    |path, _| {
+                        if_false_or_uncertain.is_always_satisfied_inner(
+                            db,
+                            builder,
+                            path,
+                            gradual_satisfied,
+                        )
+                    },
                 )
                 .unwrap_or(true)
             }
@@ -2648,6 +2700,9 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
+            // Preserve a lone gradual result when folding from the disjunction identity.
+            (Node::AlwaysFalse, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::AlwaysFalse) => self,
             (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
             (_, Node::Gradual) => self,
             (Node::AlwaysTrue, Node::AlwaysTrue) => ALWAYS_TRUE,
@@ -2677,8 +2732,6 @@ impl NodeId {
                     self_interior.source_order,
                 )
             }
-            (Node::AlwaysFalse, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::AlwaysFalse) => self,
             (Node::Interior(self_interior), Node::Interior(other_interior)) => {
                 self_interior.or(builder, other_interior, other_offset)
             }
@@ -2816,6 +2869,9 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
+            // Preserve a lone gradual result when folding from the conjunction identity.
+            (Node::AlwaysTrue, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::AlwaysTrue) => self,
             (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
             (_, Node::Gradual) => self,
             (Node::AlwaysFalse, Node::AlwaysFalse) => ALWAYS_FALSE,
@@ -2839,8 +2895,6 @@ impl NodeId {
                     self_interior.source_order,
                 )
             }
-            (Node::AlwaysTrue, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::AlwaysTrue) => self,
             (Node::Interior(self_interior), Node::Interior(other_interior)) => {
                 self_interior.and(builder, other_interior, other_offset)
             }
@@ -2848,8 +2902,12 @@ impl NodeId {
     }
 
     fn implies(self, builder: &ConstraintSetBuilder<'_>, other: Self) -> Self {
+        if self == other {
+            return ALWAYS_TRUE;
+        }
+
         // p → q == ¬p ∨ q
-        self.negate(builder).or(builder, other)
+        self.negate(builder).or_with_offset(builder, other)
     }
 
     /// Returns a new BDD that evaluates to `true` when both input BDDs evaluate to the same
@@ -2874,6 +2932,15 @@ impl NodeId {
         other: Self,
         other_offset: usize,
     ) -> Self {
+        if self == other {
+            return ALWAYS_TRUE;
+        }
+        // `GRADUAL` is an identity for conjunction and disjunction, so compare it before using
+        // the Boolean expansion.
+        if self == GRADUAL || other == GRADUAL {
+            return ALWAYS_FALSE;
+        }
+
         // iff(a, b) = (a ∧ b) ∨ (¬a ∧ ¬b)
         let a_and_b = self.and_inner(builder, other, other_offset);
         let not_a_and_not_b =
@@ -7347,28 +7414,6 @@ mod tests {
     }
 
     #[test]
-    fn gradual_sentinel_preserves_informative_constraints() {
-        let db = setup_db();
-        let t = create_typevar(&db, "T");
-        let builder = ConstraintSetBuilder::new();
-        let gradual = ConstraintSet::gradual(&builder);
-        let t_int = create_constraint(&db, &builder, t, KnownClass::Int);
-
-        assert!(!gradual.is_always_satisfied(&db));
-        assert!(!gradual.is_never_satisfied(&db));
-        assert_eq!(
-            gradual.solutions(&db, &builder, InferableTypeVars::None),
-            Solutions::Unconstrained,
-        );
-
-        // Gradual constraints are identities when combined with informative constraints.
-        assert_eq!(gradual.or(&db, &builder, || t_int).node, t_int.node);
-        assert_eq!(gradual.and(&db, &builder, || t_int).node, t_int.node);
-        assert_eq!(t_int.or(&db, &builder, || gradual).node, t_int.node);
-        assert_eq!(t_int.and(&db, &builder, || gradual).node, t_int.node);
-    }
-
-    #[test]
     fn type_mapping_updates_constraint_bounds() {
         // (list[U] ≤ T ≤ list[U])[U ↦ int] = (list[int] ≤ T ≤ list[int])
         let db = setup_db();
@@ -7638,30 +7683,6 @@ mod tests {
             Some(&false)
         );
         assert_eq!(storage.constraint_implication_cache.len(), 2);
-    }
-
-    #[test]
-    fn gradual_bounds_are_preserved_in_assignability_sequents() {
-        let db = setup_db();
-        let t = create_typevar(&db, "T");
-        let u = create_typevar(&db, "U");
-        let builder = ConstraintSetBuilder::new();
-        let constraint = ConstraintId::new_with_bounds(
-            &db,
-            &builder,
-            t,
-            Some(Type::unknown()),
-            Some(Type::TypeVar(u)),
-        );
-        let implied = ConstraintId::new_with_bounds(&db, &builder, u, Some(Type::unknown()), None);
-
-        let mut expected = SequentMap::default();
-        expected.add_single_implication(&db, &builder, constraint, implied);
-
-        assert_eq!(
-            &*SequentMap::for_constraint(&db, &builder, constraint),
-            &expected
-        );
     }
 
     #[test]

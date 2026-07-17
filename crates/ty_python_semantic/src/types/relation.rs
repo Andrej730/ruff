@@ -380,7 +380,7 @@ impl<'db> Type<'db> {
     pub fn is_assignable_to(self, db: &'db dyn Db, target: Type<'db>) -> bool {
         let constraints = ConstraintSetBuilder::new();
         self.when_assignable_to(db, target, &constraints, InferableTypeVars::None)
-            .is_always_satisfied(db)
+            .is_gradually_satisfied(db)
     }
 
     /// Re-run the assignability check with error context collection enabled.
@@ -417,7 +417,7 @@ impl<'db> Type<'db> {
     pub fn is_constraint_set_assignable_to(self, db: &'db dyn Db, target: Type<'db>) -> bool {
         let constraints = ConstraintSetBuilder::new();
         self.when_constraint_set_assignable_to(db, target, &constraints)
-            .is_always_satisfied(db)
+            .is_gradually_satisfied(db)
     }
 
     /// Return true if this type is a subtype of `target` using constraint-set typevar rules.
@@ -443,36 +443,10 @@ impl<'db> Type<'db> {
         )
     }
 
-    /// Returns whether constraint-set assignability is known to be unconditionally satisfied
-    /// before constructing the relation checker.
-    fn is_trivially_constraint_set_assignable_to(self, db: &'db dyn Db, target: Type<'db>) -> bool {
-        if self.materialized_divergent_fallback().is_none() && self == target {
-            return true;
-        }
-
-        // Type variables must be converted into constraints before applying the remaining
-        // relation shortcuts.
-        if self.is_type_var() || target.is_type_var() {
-            return false;
-        }
-
-        match (self, target) {
-            (Type::Never | Type::Dynamic(_), _) | (_, Type::Dynamic(_)) => true,
-            (_, Type::NominalInstance(target)) if target.is_object() => true,
-            (_, Type::Union(union)) => {
-                self.materialized_divergent_fallback().is_none()
-                    && union.elements(db).contains(&self)
-            }
-            (Type::Intersection(intersection), _) => {
-                target.materialized_divergent_fallback().is_none()
-                    && intersection.positive(db).contains(&target)
-            }
-            _ => false,
-        }
-    }
-
     /// Returns an _owned_ (i.e. salsa-cached) constraint set that describes when `self` is
     /// constraint-set assignable to `target`.
+    ///
+    /// Gradual assignability is evaluated lazily.
     ///
     /// Recursive relations are evaluated coinductively: a cycle is provisionally satisfied until
     /// another part of the relation produces a contradiction.
@@ -495,19 +469,16 @@ impl<'db> Type<'db> {
                 let source = types.first(db);
                 let target = types.second(db);
 
-                source.has_relation_to_with_typevar_evaluation(
+                source.has_relation_to_with_options(
                     db,
                     target,
                     constraints,
                     InferableTypeVars::None,
                     TypeRelation::Assignability,
                     TypeVarEvaluation::Lazy,
+                    GradualEvaluation::Lazy,
                 )
             })
-        }
-
-        if self.is_trivially_constraint_set_assignable_to(db, target) {
-            return Cow::Owned(OwnedConstraintSet::always());
         }
 
         Cow::Borrowed(when_constraint_set_assignable_to_owned_impl(
@@ -516,19 +487,22 @@ impl<'db> Type<'db> {
         ))
     }
 
+    /// Returns when `self` is constraint-set assignable to `target`, preserving gradual
+    /// constraints for inference.
     pub(super) fn when_constraint_set_assignable_to<'c>(
         self,
         db: &'db dyn Db,
         target: Type<'db>,
         constraints: &'c ConstraintSetBuilder<'db>,
     ) -> ConstraintSet<'db, 'c> {
-        self.has_relation_to_with_typevar_evaluation(
+        self.has_relation_to_with_options(
             db,
             target,
             constraints,
             InferableTypeVars::None,
             TypeRelation::Assignability,
             TypeVarEvaluation::Lazy,
+            GradualEvaluation::Lazy,
         )
     }
 
@@ -839,7 +813,7 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             inferable: InferableTypeVars::None,
             relation: TypeRelation::Assignability,
             typevar_evaluation: TypeVarEvaluation::Lazy,
-            gradual_evaluation: GradualEvaluation::Eager,
+            gradual_evaluation: GradualEvaluation::Lazy,
             context_tree: None,
             given: ConstraintSet::from_bool(constraints, false),
             relation_visitor,
@@ -861,7 +835,7 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             inferable: InferableTypeVars::None,
             relation: TypeRelation::Assignability,
             typevar_evaluation: TypeVarEvaluation::Lazy,
-            gradual_evaluation: GradualEvaluation::Eager,
+            gradual_evaluation: GradualEvaluation::Lazy,
             context_tree: Some(ErrorContextTree::new()),
             given: ConstraintSet::from_bool(constraints, false),
             relation_visitor,
@@ -1117,6 +1091,15 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             return self
                 .given
                 .implies_subtype_of(db, self.constraints, source, target);
+        }
+
+        // Distribute gradual constraints only when both gradual and type-variable evaluation are
+        // lazy. Otherwise, resolve gradual assignability before handling type variables.
+        if self.relation.is_assignability()
+            && !self.is_lazy_gradual_assignability()
+            && (source.is_dynamic() || target.is_dynamic())
+        {
+            return self.always();
         }
 
         // With lazy evaluation, comparisons with a type variable are translated directly into a
@@ -1378,6 +1361,9 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                     },
                 )
             }
+            // The target's materialization can make this relation hold, but that choice does not
+            // constrain an inferable type variable.
+            (_, Type::Dynamic(_)) if self.is_lazy_gradual_assignability() => self.gradual(),
             (_, Type::Dynamic(_)) => ConstraintSet::from_bool(
                 self.constraints,
                 match self.relation {
