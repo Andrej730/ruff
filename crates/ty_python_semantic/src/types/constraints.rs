@@ -6583,19 +6583,21 @@ impl PathAssignments {
         source_order: usize,
         f: impl FnOnce(&mut Self, Range<usize>) -> R,
     ) -> Option<R> {
-        // Record a snapshot of the assignments that we already knew held — both so that we can
-        // pass along the range of which assignments are new, and so that we can reset back to this
-        // point before returning.
-        let start = self.assignments.len();
+        // Record a snapshot of our current state — both so that we can pass along the range of
+        // which assignments are new, and so that we can reset back to this point before returning.
+        let sequents_start = self.sequents.len();
+        let assignments_start = self.assignments.len();
         let additional_fuels_start = self.additional_fuels.len();
         let previous_remaining_overall_fuel = self.remaining_overall_fuel;
+        let discovered_start = self.discovered.len();
+        let elaborated_start = self.elaborated.len();
 
         // Add the new assignment and anything we can derive from it.
         tracing::trace!(
             target: "ty_python_semantic::types::constraints::PathAssignment",
             before = %format_args!(
                 "[{}]",
-                self.assignments[..start].iter().map(|(assignment, _)| {
+                self.assignments[..assignments_start].iter().map(|(assignment, _)| {
                     assignment.display(db, builder)
                 }).format(", "),
             ),
@@ -6621,21 +6623,24 @@ impl PathAssignments {
                 target: "ty_python_semantic::types::constraints::PathAssignment",
                 new = %format_args!(
                     "[{}]",
-                    self.assignments[start..].iter().map(|(assignment, _)| {
+                    self.assignments[assignments_start..].iter().map(|(assignment, _)| {
                         assignment.display(db, builder)
                     }).format(", "),
                 ),
                 "new assignments",
             );
             let end = self.assignments.len();
-            Some(f(self, start..end))
+            Some(f(self, assignments_start..end))
         };
 
         // Reset back to where we were before following this edge, so that the caller can reuse a
         // single instance for the entire BDD traversal.
-        self.assignments.truncate(start);
+        self.sequents.truncate(sequents_start);
+        self.assignments.truncate(assignments_start);
         self.additional_fuels.truncate(additional_fuels_start);
         self.remaining_overall_fuel = previous_remaining_overall_fuel;
+        self.discovered.truncate(discovered_start);
+        self.elaborated.truncate(elaborated_start);
         result
     }
 
