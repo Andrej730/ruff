@@ -61,13 +61,6 @@ impl EnvVars {
     #[attr_hidden]
     pub const TY_UV: &'static str = "TY_UV";
 
-    /// Read `uv workspace metadata` output from stdin instead of invoking uv.
-    ///
-    /// When set to `"1"` or `"true"`, this is equivalent to the `--uv-metadata` command-line
-    /// argument.
-    #[attr_hidden]
-    pub const TY_UV_METADATA: &'static str = "TY_UV_METADATA";
-
     /// The path to the uv executable to use for workspace discovery.
     ///
     /// ty uses this path when uv integration is enabled by `TY_UV`.

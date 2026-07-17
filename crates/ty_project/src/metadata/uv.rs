@@ -3,13 +3,13 @@ use std::process::Command;
 
 use pep440_rs::VersionSpecifiers;
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
+use ruff_ranged_value::RangedValue;
 use serde::Deserialize;
 use thiserror::Error;
 use ty_static::EnvVars;
 
 use super::pyproject::{ResolveRequiresPythonError, resolve_requires_python_lower_bound};
 use super::python_version::SupportedPythonVersion;
-use super::value::RangedValue;
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub struct UvWorkspace {
@@ -206,4 +206,55 @@ struct WorkspaceEnvironment {
 #[derive(Deserialize)]
 struct WorkspaceMember {
     path: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::system::{SystemPath, TestSystem};
+
+    use super::{UvWorkspace, UvWorkspaceError};
+
+    #[test]
+    fn rejects_invalid_metadata() {
+        let system = TestSystem::default();
+
+        assert!(matches!(
+            UvWorkspace::from_metadata(SystemPath::new("/app"), b"{", &system),
+            Err(UvWorkspaceError::InvalidMetadata(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_schema() {
+        let system = TestSystem::default();
+        let metadata = br#"{
+            "schema": { "version": "future" },
+            "workspace_root": "/app",
+            "requires_python": ">=3.8"
+        }"#;
+
+        assert!(matches!(
+            UvWorkspace::from_metadata(SystemPath::new("/app"), metadata, &system),
+            Err(UvWorkspaceError::UnsupportedSchemaVersion(version)) if version == "future"
+        ));
+    }
+
+    #[test]
+    fn members_can_be_omitted() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        system
+            .memory_file_system()
+            .write_file_all("/app/pyproject.toml", "[tool.uv.workspace]")?;
+        let metadata = br#"{
+            "schema": { "version": "preview" },
+            "workspace_root": "/app",
+            "requires_python": ">=3.8"
+        }"#;
+
+        let workspace = UvWorkspace::from_metadata(SystemPath::new("/app"), metadata, &system)?;
+
+        assert!(workspace.member().is_none());
+
+        Ok(())
+    }
 }

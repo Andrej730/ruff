@@ -420,6 +420,7 @@ impl ConfigurationPaths {
 fn is_ignore_file(path: &SystemPath) -> bool {
     matches!(path.file_name(), Some(".gitignore" | ".ignore"))
 }
+
 fn is_project_config_file(path: &SystemPath) -> bool {
     matches!(
         path.file_name(),

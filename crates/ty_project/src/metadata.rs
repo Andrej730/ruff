@@ -25,7 +25,7 @@ pub mod options;
 pub mod pyproject;
 pub mod python_version;
 pub mod settings;
-pub mod uv;
+mod uv;
 pub mod value;
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
@@ -298,7 +298,7 @@ impl ProjectMetadata {
                 }
             } else if is_uv_workspace_root {
                 uv_project = Some(Self::new(
-                    project_root.file_name().unwrap_or("root").into(),
+                    project_root.file_name().unwrap_or("root"),
                     project_root.to_path_buf(),
                 ));
             }
@@ -330,7 +330,7 @@ impl ProjectMetadata {
     }
 
     #[must_use]
-    pub fn with_uv_workspace(mut self, uv_workspace: Option<uv::UvWorkspace>) -> Self {
+    fn with_uv_workspace(mut self, uv_workspace: Option<uv::UvWorkspace>) -> Self {
         self.uv_workspace = uv_workspace;
         self
     }
@@ -477,15 +477,16 @@ impl ProjectMetadata {
         }
 
         if let Some(uv_workspace) = &self.uv_workspace {
-            self.options
-                .environment
-                .combine_with(Some(EnvironmentOptions {
+            self.apply_fallback_options(Options {
+                environment: Some(EnvironmentOptions {
                     python_version: uv_workspace.requires_python().cloned(),
                     python: uv_workspace
                         .environment()
                         .map(|path| RelativePathBuf::cli(path.to_path_buf())),
                     ..EnvironmentOptions::default()
-                }));
+                }),
+                ..Options::default()
+            });
         }
 
         Ok(())
@@ -595,8 +596,9 @@ mod tests {
     use insta::assert_ron_snapshot;
     use ruff_db::system::{SystemPathBuf, TestSystem};
     use ruff_python_ast::PythonVersion;
+    use ruff_ranged_value::ValueSource;
 
-    use crate::metadata::uv::UvWorkspace;
+    use crate::metadata::{Options, uv::UvWorkspace, value::RelativePathBuf};
     use crate::{ProjectMetadata, ProjectMetadataError};
 
     #[test]
@@ -868,7 +870,7 @@ unclosed table, expected `]`
             ),
         ])?;
 
-        let uv_workspace = uv_workspace(&root, &member, &system);
+        let uv_workspace = uv_workspace(&root, &member, &system)?;
         let project =
             ProjectMetadata::discover_with_uv_workspace(&member, &system, Some(uv_workspace))?;
 
@@ -897,12 +899,30 @@ unclosed table, expected `]`
             ),
         ])?;
 
-        let uv_workspace = uv_workspace(&root, &member, &system);
-        let project =
+        let uv_workspace = uv_workspace(&root, &member, &system)?;
+        let mut project =
             ProjectMetadata::discover_with_uv_workspace(&member, &system, Some(uv_workspace))?;
+        project.apply_configuration_files(&system)?;
 
         assert_eq!(project.root(), &*member);
-        assert_eq!(project.extra_configuration_paths(), &[root.join("uv.toml")]);
+        assert_eq!(
+            project
+                .extra_configuration_paths()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            [root.join("uv.toml")]
+        );
+        assert_eq!(
+            project
+                .to_merged_options()
+                .options()
+                .environment
+                .as_ref()
+                .and_then(|environment| environment.python_version.as_deref())
+                .copied()
+                .map(PythonVersion::from),
+            Some(PythonVersion::PY310)
+        );
 
         Ok(())
     }
@@ -932,11 +952,100 @@ unclosed table, expected `]`
             ),
         ])?;
 
-        let uv_workspace = uv_workspace(&workspace, &member, &system);
+        let uv_workspace = uv_workspace(&workspace, &member, &system)?;
         let project =
             ProjectMetadata::discover_with_uv_workspace(&member, &system, Some(uv_workspace))?;
 
         assert_eq!(project.root(), &*root);
+
+        Ok(())
+    }
+
+    #[test]
+    fn applies_uv_workspace_environment() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let root = SystemPathBuf::from("/app");
+        let member = root.join("packages/member");
+        let environment = root.join("uv-venv");
+
+        system.memory_file_system().write_files_all([
+            (root.join("pyproject.toml"), "[tool.uv.workspace]"),
+            (member.join("pyproject.toml"), "[project]\nname = 'member'"),
+            (environment.join("marker"), ""),
+        ])?;
+
+        let metadata = serde_json::json!({
+            "schema": {
+                "version": "preview",
+            },
+            "workspace_root": root,
+            "environment": {
+                "root": environment,
+            },
+            "requires_python": ">=3.11",
+            "members": [{
+                "path": member,
+            }],
+        });
+        let uv_workspace =
+            UvWorkspace::from_metadata(&member, metadata.to_string().as_bytes(), &system)?;
+        let mut project =
+            ProjectMetadata::discover_with_uv_workspace(&member, &system, Some(uv_workspace))?;
+        project.apply_fallback_options(Options::from_toml_str(
+            r#"
+            [environment]
+            python = "/editor-venv"
+            python-version = "3.10"
+            "#,
+            ValueSource::Editor,
+        )?);
+        project.apply_configuration_files(&system)?;
+
+        let merged_options = project.to_merged_options();
+        let project_environment = merged_options.options().environment.as_ref();
+        assert_eq!(
+            project_environment
+                .and_then(|environment| environment.python_version.as_deref())
+                .copied()
+                .map(PythonVersion::from),
+            Some(PythonVersion::PY311)
+        );
+        assert_eq!(
+            project_environment
+                .and_then(|environment| environment.python.as_ref())
+                .map(RelativePathBuf::path),
+            Some(environment.as_path())
+        );
+
+        let user_config_directory = root.join("config");
+        system
+            .in_memory()
+            .set_user_configuration_directory(Some(user_config_directory.clone()));
+        system.memory_file_system().write_file_all(
+            user_config_directory.join("ty/ty.toml"),
+            r#"
+            [environment]
+            python = "/user-venv"
+            python-version = "3.12"
+            "#,
+        )?;
+        project.apply_configuration_files(&system)?;
+
+        let merged_options = project.to_merged_options();
+        let project_environment = merged_options.options().environment.as_ref();
+        assert_eq!(
+            project_environment
+                .and_then(|environment| environment.python_version.as_deref())
+                .copied()
+                .map(PythonVersion::from),
+            Some(PythonVersion::PY312)
+        );
+        assert_eq!(
+            project_environment
+                .and_then(|environment| environment.python.as_ref())
+                .map(|python| python.path().as_str()),
+            Some("/user-venv")
+        );
 
         Ok(())
     }
@@ -1404,7 +1513,7 @@ unclosed table, expected `]`
         root: &SystemPathBuf,
         member: &SystemPathBuf,
         system: &TestSystem,
-    ) -> UvWorkspace {
+    ) -> anyhow::Result<UvWorkspace> {
         let metadata = serde_json::json!({
             "schema": {
                 "version": "preview",
@@ -1416,7 +1525,11 @@ unclosed table, expected `]`
             }],
         });
 
-        UvWorkspace::from_metadata(member, metadata.to_string().as_bytes(), system).unwrap()
+        Ok(UvWorkspace::from_metadata(
+            member,
+            metadata.to_string().as_bytes(),
+            system,
+        )?)
     }
 
     fn with_escaped_paths<R>(f: impl FnOnce() -> R) -> R {

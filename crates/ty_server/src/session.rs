@@ -1100,7 +1100,7 @@ impl Session {
                 .collect();
             watchers.extend(
                 self.project_dbs()
-                    .flat_map(|db| db.project().metadata(db).extra_configuration_paths().iter())
+                    .flat_map(|db| db.project().metadata(db).extra_configuration_paths())
                     .filter_map(|path| {
                         Some(make_relative_watcher(path.parent()?, path.file_name()?))
                     }),
