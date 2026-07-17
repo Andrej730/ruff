@@ -5364,6 +5364,33 @@ enum Sequent {
     },
 }
 
+impl Sequent {
+    fn has_antecedent(self, needle: ConstraintAssignment) -> bool {
+        match (self, needle) {
+            // A tautology is activated when its antecedent does NOT hold
+            (Sequent::SingleTautology { ante }, ConstraintAssignment::Negative(constraint)) => {
+                ante == constraint
+            }
+
+            // All other sequents are activated when their antecedents DO hold
+            (
+                Sequent::PairImpossibility { ante1, ante2 },
+                ConstraintAssignment::Positive(constraint),
+            ) => ante1 == constraint || ante2 == constraint,
+            (
+                Sequent::PairImplication { ante1, ante2, .. },
+                ConstraintAssignment::Positive(constraint),
+            ) => ante1 == constraint || ante2 == constraint,
+            (
+                Sequent::SingleImplication { ante, .. },
+                ConstraintAssignment::Positive(constraint),
+            ) => ante == constraint,
+
+            _ => false,
+        }
+    }
+}
+
 impl SequentMap {
     /// Returns a sequent map containing the sequents that we can infer from a single constraint in
     /// isolation. This method is salsa-tracked so that we only perform this work once per
@@ -6840,14 +6867,22 @@ impl PathAssignments {
         // TODO: This might not be stable enough, if we add more than one derived fact for this
         // constraint. If we still see inconsistent test output, we might need a more complex
         // way of tracking source order for derived facts.
-        //
-        // TODO: This is very naive at the moment, partly for expediency, and partly because we
-        // don't anticipate the sequent maps to be very large. We might consider avoiding the
-        // brute-force search.
 
+        // First see if there are any existing known sequents that have become activated by the new
+        // constraint.
+        let existing = self.sequents.len();
+        for i in 0..existing {
+            let sequent = self.sequents[i];
+            if sequent.has_antecedent(assignment) {
+                self.check_sequent(db, builder, sequent)?;
+            }
+        }
+
+        // Then discover and elaborate any new sequents from this assignment.
         self.discover_constraint(db, builder, assignment.constraint());
 
-        for i in 0..self.sequents.len() {
+        // And apply each of those sequents if possible.
+        for i in existing..self.sequents.len() {
             let sequent = self.sequents[i];
             self.check_sequent(db, builder, sequent)?;
         }
