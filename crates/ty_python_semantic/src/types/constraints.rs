@@ -6488,10 +6488,13 @@ pub(crate) struct PathAssignments {
     additional_fuels: Vec<(usize, AssignmentFuel)>,
     /// The amount of global fuel that remains across all assignments and paths.
     remaining_overall_fuel: u16,
-    /// Constraints that we have discovered, mapped to whether we have processed them yet. (This
-    /// ensures a stable order for all of the derived constraints that we create, while still
+    /// Constraints that we have discovered, regardless of whether we have elaborated them yet.
+    /// (This ensures a stable order for all of the derived constraints that we create, while still
     /// letting us create them lazily.)
-    discovered: FxIndexMap<ConstraintId, bool>,
+    discovered: FxIndexSet<ConstraintId>,
+    /// Constraints that we have elaborated (adding any sequents derivable via them to set of
+    /// available `sequents` )
+    elaborated: FxIndexSet<ConstraintId>,
     /// Derived assignments that have been queued up to add because of the most recent BDD
     /// assignment
     assignment_queue: VecDeque<(ConstraintAssignment, AssignmentFuel)>,
@@ -6538,15 +6541,13 @@ impl AssignmentFuel {
 
 impl PathAssignments {
     fn new(constraints: impl IntoIterator<Item = ConstraintId>) -> Self {
-        let discovered = constraints
-            .into_iter()
-            .map(|constraint| (constraint, false))
-            .collect();
+        let discovered = constraints.into_iter().collect();
         Self {
             sequents: Vec::default(),
             assignments: FxIndexMap::default(),
             additional_fuels: Vec::default(),
             discovered,
+            elaborated: FxIndexSet::default(),
             remaining_overall_fuel: OVERALL_FUEL_BUDGET,
             assignment_queue: VecDeque::default(),
         }
@@ -6681,9 +6682,9 @@ impl PathAssignments {
         constraint: ConstraintId,
     ) {
         // If we've already processed this constraint, we can skip it.
-        let existing = self.discovered.insert(constraint, true);
-        let already_processed = existing.is_some_and(|existing| existing);
-        if already_processed {
+        self.discovered.insert(constraint);
+        let already_elaborated = !self.elaborated.insert(constraint);
+        if already_elaborated {
             return;
         }
 
@@ -6691,7 +6692,10 @@ impl PathAssignments {
         self.sequents.extend_from_slice(&single_map.sequents);
         drop(single_map);
 
-        for existing in self.discovered.keys().dropping_back(1) {
+        for existing in &self.discovered {
+            if *existing == constraint {
+                continue;
+            }
             let pair_map = SequentMap::for_constraint_pair(db, builder, *existing, constraint);
             self.sequents.extend_from_slice(&pair_map.sequents);
         }
