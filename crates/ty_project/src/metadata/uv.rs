@@ -24,7 +24,8 @@ impl UvWorkspace {
             .env_var(EnvVars::UV)
             .unwrap_or_else(|_| "uv".to_string());
 
-        let output = match system.run_command(&uv, &["workspace", "metadata", "--sync"], path) {
+        let args = workspace_metadata_args(system);
+        let output = match system.run_command(&uv, args, path) {
             Ok(output) => output,
             Err(error) => {
                 tracing::debug!("Failed to invoke `uv workspace metadata`: {error}");
@@ -121,6 +122,14 @@ impl UvWorkspace {
     }
 }
 
+fn workspace_metadata_args(system: &dyn System) -> &'static [&'static str] {
+    if system.env_var(EnvVars::VIRTUAL_ENV).is_ok() {
+        &["workspace", "metadata", "--sync", "--active"]
+    } else {
+        &["workspace", "metadata", "--sync"]
+    }
+}
+
 fn existing_directory(
     path: PathBuf,
     description: &'static str,
@@ -196,8 +205,27 @@ struct WorkspaceMember {
 #[cfg(test)]
 mod tests {
     use ruff_db::system::{SystemPath, TestSystem};
+    use ty_static::EnvVars;
 
-    use super::{UvWorkspace, UvWorkspaceError};
+    use super::{UvWorkspace, UvWorkspaceError, workspace_metadata_args};
+
+    #[test]
+    fn uses_active_environment_when_set() {
+        let system = TestSystem::default();
+        system.remove_env_var(EnvVars::VIRTUAL_ENV);
+
+        assert_eq!(
+            workspace_metadata_args(&system),
+            ["workspace", "metadata", "--sync"]
+        );
+
+        system.set_env_var(EnvVars::VIRTUAL_ENV, "/app/.venv");
+
+        assert_eq!(
+            workspace_metadata_args(&system),
+            ["workspace", "metadata", "--sync", "--active"]
+        );
+    }
 
     #[test]
     fn rejects_invalid_metadata() {
