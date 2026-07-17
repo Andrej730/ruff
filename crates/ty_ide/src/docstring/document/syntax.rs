@@ -1,7 +1,7 @@
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_python_trivia::{Cursor, leading_indentation, tab_offset_u32};
 use ruff_source_file::UniversalNewlines;
-use ruff_text_size::{TextRange, TextSize};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::rst::is_field_list_marker;
 
@@ -112,6 +112,287 @@ pub(in crate::docstring) fn is_backtick_run_escaped(text: &str, index: usize) ->
         .take_while(|byte| *byte == b'\\')
         .count()
         .is_multiple_of(2)
+}
+
+/// Losslessly partitions source text around complete, unescaped backtick spans.
+///
+/// For example:
+///
+/// ```text
+/// BacktickFragments::new("before `code` after")
+///     => Text("before "), Span("code"), Text(" after")
+/// ```
+pub(in crate::docstring) struct BacktickFragments<'a> {
+    /// The scanner used to find complete spans.
+    runs: BacktickRuns<'a>,
+    /// The end of the last fragment returned to the caller.
+    last_fragment_end: TextSize,
+    /// A span saved while the preceding text is returned first.
+    pending_span: Option<BacktickSpan<'a>>,
+}
+
+impl<'a> BacktickFragments<'a> {
+    /// Creates a lossless iterator over plain text and complete backtick-delimited spans.
+    ///
+    /// Escaped or unmatched backtick runs remain part of a [`BacktickFragment::Text`] fragment.
+    pub(in crate::docstring) fn new(source: &'a str) -> Self {
+        Self {
+            runs: BacktickRuns::new(source),
+            last_fragment_end: TextSize::ZERO,
+            pending_span: None,
+        }
+    }
+
+    fn take_remaining_text(&mut self) -> Option<BacktickFragment<'a>> {
+        let source_end = TextSize::of(self.runs.source);
+        let remaining = TextRange::new(self.last_fragment_end, source_end);
+        self.last_fragment_end = source_end;
+        (!remaining.is_empty()).then(|| BacktickFragment::Text(&self.runs.source[remaining]))
+    }
+}
+
+impl<'a> Iterator for BacktickFragments<'a> {
+    type Item = BacktickFragment<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(span) = self.pending_span.take() {
+            debug_assert_eq!(self.last_fragment_end, span.start());
+            self.last_fragment_end = span.end();
+            return Some(BacktickFragment::Span(span));
+        }
+
+        if self.last_fragment_end == TextSize::of(self.runs.source) {
+            return None;
+        }
+
+        loop {
+            let Some(opening) = self.runs.next() else {
+                return self.take_remaining_text();
+            };
+
+            // Escaped runs are literal source text, so continue looking for the next possible
+            // opening without emitting a fragment boundary.
+            if opening.is_escaped() {
+                continue;
+            }
+
+            // Without a closing delimiter, callers cannot treat the opening or any later runs as
+            // structured markup. Emit the remainder as one text fragment.
+            let Some(span) = self.runs.eat_span(opening) else {
+                return self.take_remaining_text();
+            };
+
+            if self.last_fragment_end < span.start() {
+                let preceding_text = TextRange::new(self.last_fragment_end, span.start());
+                self.last_fragment_end = span.start();
+                self.pending_span = Some(span);
+                return Some(BacktickFragment::Text(&self.runs.source[preceding_text]));
+            }
+
+            debug_assert_eq!(self.last_fragment_end, span.start());
+            self.last_fragment_end = span.end();
+            return Some(BacktickFragment::Span(span));
+        }
+    }
+}
+
+/// One lossless fragment produced by [`BacktickFragments`].
+///
+/// For example:
+///
+/// ```text
+/// source      "before `code` after"
+/// fragments   Text("before "), Span("code"), Text(" after")
+/// ```
+///
+/// Escaped and unmatched backticks remain text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::docstring) enum BacktickFragment<'a> {
+    /// Source text outside a complete, unescaped backtick span.
+    Text(&'a str),
+    /// A complete span whose delimiters have equal lengths.
+    Span(BacktickSpan<'a>),
+}
+
+/// Source text delimited by ordered backtick runs of equal length.
+///
+/// For example:
+///
+/// ```text
+/// source          "before ``code`` after"
+/// range()         7..15
+/// is_single()     false
+/// content()       "code"
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::docstring) struct BacktickSpan<'a> {
+    /// The source between the opening and closing delimiters.
+    content: &'a str,
+    /// The byte range including both delimiters.
+    range: TextRange,
+    /// The byte length of either delimiter.
+    delimiter_len: TextSize,
+}
+
+impl<'a> BacktickSpan<'a> {
+    /// Returns whether both delimiters consist of one backtick.
+    pub(in crate::docstring) fn is_single(self) -> bool {
+        self.delimiter_len == TextSize::new(1)
+    }
+
+    /// Returns the source between the opening and closing runs.
+    pub(in crate::docstring) fn content(self) -> &'a str {
+        self.content
+    }
+}
+
+impl Ranged for BacktickSpan<'_> {
+    fn range(&self) -> TextRange {
+        self.range
+    }
+}
+
+/// Scans consecutive backtick runs in source order.
+///
+/// The scanner can consume a complete span after returning its opening run. For example:
+///
+/// ```text
+/// source                  "prefix ``code`` suffix"
+/// next()                  Some(BacktickRun("``"))
+/// as_str()                "code`` suffix"
+/// eat_span(opening)       Some(BacktickSpan("``code``"))
+/// as_str()                " suffix"
+/// ```
+#[derive(Clone)]
+pub(in crate::docstring) struct BacktickRuns<'a> {
+    /// The complete source whose runs are returned.
+    source: &'a str,
+    /// The current scan position within `source`.
+    cursor: Cursor<'a>,
+}
+
+impl<'a> BacktickRuns<'a> {
+    /// Creates a scanner positioned at the start of `source`.
+    pub(in crate::docstring) fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            cursor: Cursor::new(source),
+        }
+    }
+
+    /// Creates a scanner positioned at `offset` within `source`.
+    pub(in crate::docstring) fn starts_at(offset: TextSize, source: &'a str) -> Self {
+        let mut scanner = Self::new(source);
+        scanner.cursor.skip_bytes(offset.to_usize());
+        scanner
+    }
+
+    /// Returns the remaining source.
+    pub(in crate::docstring) fn as_str(&self) -> &'a str {
+        self.cursor.as_str()
+    }
+
+    /// Consumes the closing run that matches the most recently returned `opening`.
+    ///
+    /// Returns `None` without advancing when no matching run exists.
+    pub(in crate::docstring) fn eat_span(
+        &mut self,
+        opening: BacktickRun,
+    ) -> Option<BacktickSpan<'a>> {
+        debug_assert_eq!(opening.end(), self.cursor.offset());
+
+        let mut lookahead = self.clone();
+        while let Some(closing) = lookahead.next() {
+            if let Some(span) = self.span(opening, closing) {
+                *self = lookahead;
+                return Some(span);
+            }
+        }
+        None
+    }
+
+    /// Creates a span from two ordered runs of equal length.
+    ///
+    /// Both runs must use ranges in this scanner's source.
+    pub(in crate::docstring) fn span(
+        &self,
+        opening: BacktickRun,
+        closing: BacktickRun,
+    ) -> Option<BacktickSpan<'a>> {
+        if opening.end() > closing.start() || opening.range.len() != closing.range.len() {
+            return None;
+        }
+
+        Some(BacktickSpan {
+            content: &self.source[TextRange::new(opening.end(), closing.start())],
+            range: opening.range.cover(closing.range),
+            delimiter_len: opening.range.len(),
+        })
+    }
+
+    /// Returns the scanner's cursor at its current position.
+    pub(in crate::docstring) fn into_cursor(self) -> Cursor<'a> {
+        self.cursor
+    }
+}
+
+impl Iterator for BacktickRuns<'_> {
+    type Item = BacktickRun;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cursor.eat_while(|character| character != '`');
+        if self.cursor.is_eof() {
+            return None;
+        }
+
+        let start = self.cursor.offset();
+        self.cursor.eat_while(|character| character == '`');
+        let range = TextRange::new(start, self.cursor.offset());
+        let escaped = !self.source[..start.to_usize()]
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'\\')
+            .count()
+            .is_multiple_of(2);
+
+        Some(BacktickRun { range, escaped })
+    }
+}
+
+/// One consecutive run of backticks found by [`BacktickRuns`].
+///
+/// For example:
+///
+/// ```text
+/// source          "before \\`` after"
+/// range()         8..10
+/// is_single()     false
+/// is_escaped()    true
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::docstring) struct BacktickRun {
+    /// The byte range of the consecutive backticks.
+    range: TextRange,
+    /// Whether an odd-length backslash run escapes the first backtick.
+    escaped: bool,
+}
+
+impl BacktickRun {
+    /// Returns whether this run consists of one backtick.
+    pub(in crate::docstring) fn is_single(self) -> bool {
+        self.range.len() == TextSize::new(1)
+    }
+
+    /// Returns whether a preceding odd-length backslash run escapes this run.
+    pub(in crate::docstring) fn is_escaped(self) -> bool {
+        self.escaped
+    }
+}
+
+impl Ranged for BacktickRun {
+    fn range(&self) -> TextRange {
+        self.range
+    }
 }
 
 /// Returns the end of an indented Markdown or reStructuredText container block.
@@ -278,8 +559,47 @@ pub(super) fn indentation(line: &str) -> TextSize {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_markdown_code_span, split_once_at_top_level_colon, split_trailing_parenthetical,
+        BacktickFragment, BacktickFragments, BacktickRuns, TextSize, is_markdown_code_span,
+        split_once_at_top_level_colon, split_trailing_parenthetical,
     };
+
+    #[test]
+    fn scans_backtick_runs_and_spans() {
+        let mut runs = BacktickRuns::starts_at(TextSize::new(7), "prefix ``code`` suffix");
+        let opening = runs.next().expect("an opening backtick run");
+
+        assert!(!opening.is_single());
+        assert!(!opening.is_escaped());
+        assert_eq!(runs.as_str(), "code`` suffix");
+
+        let span = runs.eat_span(opening).expect("a matching backtick run");
+        assert!(!span.is_single());
+        assert_eq!(span.content(), "code");
+        assert_eq!(runs.into_cursor().as_str(), " suffix");
+    }
+
+    #[test]
+    fn partitions_text_and_backtick_spans() {
+        let source = "é :class:`~pkg.Widget` or ``literal`tick`` β";
+
+        assert_eq!(
+            fragment_contents(source),
+            vec![
+                ("text", "é :class:"),
+                ("span", "~pkg.Widget"),
+                ("text", " or "),
+                ("span", "literal`tick"),
+                ("text", " β"),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_escaped_and_unmatched_backticks_as_text() {
+        let source = r"\`literal\` and `unfinished";
+
+        assert_eq!(fragment_contents(source), vec![("text", source)]);
+    }
 
     #[test]
     fn recognizes_complete_markdown_code_spans() {
@@ -387,5 +707,14 @@ mod tests {
     #[test]
     fn rejects_parenthesized_group_before_trailing_text() {
         assert_eq!(split_trailing_parenthetical("value (str) or None"), None);
+    }
+
+    fn fragment_contents(source: &str) -> Vec<(&'static str, &str)> {
+        BacktickFragments::new(source)
+            .map(|fragment| match fragment {
+                BacktickFragment::Text(text) => ("text", text),
+                BacktickFragment::Span(span) => ("span", span.content()),
+            })
+            .collect()
     }
 }
