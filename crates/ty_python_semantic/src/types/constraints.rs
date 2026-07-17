@@ -873,7 +873,8 @@ struct ConstraintSetStorage<'db> {
     simplify_cache: FxHashMap<NodeId, NodeId>,
 
     single_sequent_cache: FxHashMap<ConstraintId, SequentMap>,
-    pair_sequent_cache: FxHashMap<(ConstraintId, ConstraintId), SequentMap>,
+    eager_pair_sequent_cache: FxHashMap<(ConstraintId, ConstraintId), SequentMap>,
+    lazy_pair_sequent_cache: FxHashMap<(ConstraintId, ConstraintId), SequentMap>,
     constraint_set_subtype_cache: FxHashMap<(Type<'db>, Type<'db>), bool>,
 }
 
@@ -5149,6 +5150,10 @@ impl ConstraintAssignment {
         *self = self.negated();
     }
 
+    fn is_positive(self) -> bool {
+        matches!(self, ConstraintAssignment::Positive(_))
+    }
+
     /// Returns whether this constraint implies another — i.e., whether every type that
     /// satisfies this constraint also satisfies `other`.
     ///
@@ -5313,12 +5318,13 @@ impl ConstraintAssignment {
 /// encountered during the walk. It builds up its sequent map lazily, so that it only has to
 /// include sequents for the constraints that are actually encountered. However, we also don't want
 /// to perform duplicate work if we perform multiple BDD walks on the same constraint set. The
-/// [`for_constraint`][Self::for_constraint] and [`for_constraint_pair`][Self::for_constraint_pair]
-/// methods are salsa-tracked, to ensure that we only perform them once for any particular
-/// constraint or pair of constraints. `PathAssignments` invokes these methods when it encounters a
-/// new constraint, and then merges those cached sequents into its own sequent map. (That means we
-/// also share the work of calculating the sequent map across `PathAssignments` for _different_
-/// constraint sets.)
+/// [`for_constraint`][Self::for_constraint],
+/// [`for_eager_constraint_pair`][Self::for_eager_constraint_pair], and
+/// [`for_lazy_constraint_pair`][Self::for_lazy_constraint_pair] methods are cached, to ensure that
+/// we only perform them once for any particular constraint or pair of constraints.
+/// `PathAssignments` invokes these methods when it encounters a new constraint, and then merges
+/// those cached sequents into its own sequent map. (That means we also share the work of
+/// calculating the sequent map across `PathAssignments` for _different_ constraint sets.)
 #[derive(Debug, Default)]
 struct SequentMap {
     sequents: Vec<Sequent>,
@@ -5348,8 +5354,9 @@ enum Sequent {
     /// This indicates that if `C₁` and `C₂` are both true, then `D` is guaranteed to be true as
     /// well. For any path that assumes both `C₁` and `C₂` hold, we can add `D` to the path even if
     /// it doesn't appear in the BDD.
-    SingleImplication {
-        ante: ConstraintId,
+    PairImplication {
+        ante1: ConstraintId,
+        ante2: ConstraintId,
         post: ConstraintId,
     },
 
@@ -5357,9 +5364,8 @@ enum Sequent {
     ///
     /// This indicates that `C` on its own is enough to imply `D`. For any path that assumes `C`
     /// holds, we can add `D` to the path even if it doesn't appear in the BDD.
-    PairImplication {
-        ante1: ConstraintId,
-        ante2: ConstraintId,
+    SingleImplication {
+        ante: ConstraintId,
         post: ConstraintId,
     },
 }
@@ -5393,8 +5399,7 @@ impl Sequent {
 
 impl SequentMap {
     /// Returns a sequent map containing the sequents that we can infer from a single constraint in
-    /// isolation. This method is salsa-tracked so that we only perform this work once per
-    /// constraint.
+    /// isolation. This method is cached so that we only perform this work once per constraint.
     fn for_constraint<'db, 'c>(
         db: &'db dyn Db,
         builder: &'c ConstraintSetBuilder<'db>,
@@ -5424,12 +5429,20 @@ impl SequentMap {
     }
 
     /// Returns a sequent map containing the sequents that we can infer from a pair of constraints.
-    /// This method is salsa-tracked so that we only perform this work once per constraint pair.
+    /// This method is cached so that we only perform this work once per constraint pair.
+    ///
+    /// This method returns the sequents that we must find _eagerly_, because those sequents have
+    /// some _other_ constraint as an antecedent. That means we have to elaborate these sequents as
+    /// soon as we _discover_ `left` and `right`, since we might produce a sequent with an
+    /// unrelated antecedent that is already true on the current path. This contrasts with _lazy_
+    /// sequents ([`for_lazy_constraint_pair`][Self::for_lazy_constraint_pair]), all of which are
+    /// guaranteed to have only `left` and `right` as antecedents. We can wait to elaborate lazy
+    /// constraints until we find a path where both `left` and `right` hold.
     ///
     /// (Note that this method is _not_ commutative; you should provide `left` and `right` in the
     /// order that they appear in the source code, so that we can construct derived constraints
     /// that retain that ordering.)
-    fn for_constraint_pair<'db, 'c>(
+    fn for_eager_constraint_pair<'db, 'c>(
         db: &'db dyn Db,
         builder: &'c ConstraintSetBuilder<'db>,
         left: ConstraintId,
@@ -5437,7 +5450,9 @@ impl SequentMap {
     ) -> Ref<'c, Self> {
         let key = (left, right);
         let storage = builder.storage.borrow();
-        if let Ok(map) = Ref::filter_map(storage, |storage| storage.pair_sequent_cache.get(&key)) {
+        if let Ok(map) = Ref::filter_map(storage, |storage| {
+            storage.eager_pair_sequent_cache.get(&key)
+        }) {
             return map;
         }
 
@@ -5445,17 +5460,59 @@ impl SequentMap {
             target: "ty_python_semantic::types::constraints::SequentMap",
             left = %left.display(db, builder),
             right = %right.display(db, builder),
-            "add sequents for constraint pair",
+            "add eager sequents for constraint pair",
         );
         let mut map = SequentMap::default();
-        map.add_sequents_for_pair(db, builder, left, right);
+        map.add_eager_sequents_for_pair(db, builder, left, right);
 
         let mut storage = builder.storage.borrow_mut();
-        storage.pair_sequent_cache.insert(key, map);
+        storage.eager_pair_sequent_cache.insert(key, map);
         drop(storage);
 
         let storage = builder.storage.borrow();
-        Ref::map(storage, |storage| &storage.pair_sequent_cache[&key])
+        Ref::map(storage, |storage| &storage.eager_pair_sequent_cache[&key])
+    }
+
+    /// Returns a sequent map containing the sequents that we can infer from a pair of constraints.
+    /// This method is cached so that we only perform this work once per constraint pair.
+    ///
+    /// This method returns the sequents that we must find _lazily_, because those sequents only
+    /// have `left` and `right` as antecedents. This contrasts with _eager_ sequents
+    /// ([`for_eager_constraint_pair`][Self::for_eager_constraint_pair]); see that method for more
+    /// details.
+    ///
+    /// (Note that this method is _not_ commutative; you should provide `left` and `right` in the
+    /// order that they appear in the source code, so that we can construct derived constraints
+    /// that retain that ordering.)
+    fn for_lazy_constraint_pair<'db, 'c>(
+        db: &'db dyn Db,
+        builder: &'c ConstraintSetBuilder<'db>,
+        left: ConstraintId,
+        right: ConstraintId,
+    ) -> Ref<'c, Self> {
+        let key = (left, right);
+        let storage = builder.storage.borrow();
+        if let Ok(map) =
+            Ref::filter_map(storage, |storage| storage.lazy_pair_sequent_cache.get(&key))
+        {
+            return map;
+        }
+
+        tracing::trace!(
+            target: "ty_python_semantic::types::constraints::SequentMap",
+            left = %left.display(db, builder),
+            right = %right.display(db, builder),
+            "add lazy sequents for constraint pair",
+        );
+        let mut map = SequentMap::default();
+        map.add_lazy_sequents_for_pair(db, builder, left, right);
+
+        let mut storage = builder.storage.borrow_mut();
+        storage.lazy_pair_sequent_cache.insert(key, map);
+        drop(storage);
+
+        let storage = builder.storage.borrow();
+        Ref::map(storage, |storage| &storage.lazy_pair_sequent_cache[&key])
     }
 
     fn add_single_tautology(&mut self, ante: ConstraintId) {
@@ -5639,7 +5696,37 @@ impl SequentMap {
         }
     }
 
-    fn add_sequents_for_pair<'db>(
+    fn add_eager_sequents_for_pair<'db>(
+        &mut self,
+        db: &'db dyn Db,
+        builder: &ConstraintSetBuilder<'db>,
+        left_constraint: ConstraintId,
+        right_constraint: ConstraintId,
+    ) {
+        self.add_sequents_for_pair::</* lazy */ false>(
+            db,
+            builder,
+            left_constraint,
+            right_constraint,
+        );
+    }
+
+    fn add_lazy_sequents_for_pair<'db>(
+        &mut self,
+        db: &'db dyn Db,
+        builder: &ConstraintSetBuilder<'db>,
+        left_constraint: ConstraintId,
+        right_constraint: ConstraintId,
+    ) {
+        self.add_sequents_for_pair::</* lazy */ true>(
+            db,
+            builder,
+            left_constraint,
+            right_constraint,
+        );
+    }
+
+    fn add_sequents_for_pair<'db, const LAZY: bool>(
         &mut self,
         db: &'db dyn Db,
         builder: &ConstraintSetBuilder<'db>,
@@ -5673,13 +5760,15 @@ impl SequentMap {
         let right_typevar = right_constraint_data.typevar;
 
         if !left_typevar.is_same_typevar_as(db, right_typevar) {
-            self.add_mutual_sequents_for_different_typevars(
-                db,
-                builder,
-                left_constraint,
-                right_constraint,
-            );
-            self.add_nested_typevar_sequents(db, builder, left_constraint, right_constraint);
+            if LAZY {
+                self.add_mutual_sequents_for_different_typevars(
+                    db,
+                    builder,
+                    left_constraint,
+                    right_constraint,
+                );
+                self.add_nested_typevar_sequents(db, builder, left_constraint, right_constraint);
+            }
         } else if left_constraint_data
             .bounds
             .lower
@@ -5697,14 +5786,18 @@ impl SequentMap {
                 .upper
                 .is_some_and(Type::is_type_var)
         {
-            self.add_mutual_sequents_for_same_typevars(
-                db,
-                builder,
-                left_constraint,
-                right_constraint,
-            );
+            if LAZY {
+                self.add_mutual_sequents_for_same_typevars(
+                    db,
+                    builder,
+                    left_constraint,
+                    right_constraint,
+                );
+            }
         } else {
-            self.add_concrete_sequents(db, builder, left_constraint, right_constraint);
+            if !LAZY {
+                self.add_concrete_sequents(db, builder, left_constraint, right_constraint);
+            }
         }
     }
 
@@ -5715,6 +5808,9 @@ impl SequentMap {
         left_constraint: ConstraintId,
         right_constraint: ConstraintId,
     ) {
+        // This method only creates sequents of the form `left ∧ right → ...`, so it can be
+        // elaborated lazily.
+
         // We've structured our constraints so that a typevar's upper/lower bound can only
         // be another typevar if the bound is "later" in our arbitrary ordering. That means
         // we only have to check this pair of constraints in one direction — though we do
@@ -5894,6 +5990,9 @@ impl SequentMap {
         left_constraint: ConstraintId,
         right_constraint: ConstraintId,
     ) {
+        // This method only creates sequents of the form `left ∧ right → ...`, so it can be
+        // elaborated lazily.
+
         // Keep this precheck aligned with `variance_of`, which visits lazy types.
         let has_typevar_bound = |bounds: ConstraintBounds<'db>| {
             bounds
@@ -6222,6 +6321,9 @@ impl SequentMap {
         left_constraint: ConstraintId,
         right_constraint: ConstraintId,
     ) {
+        // This method only creates sequents of the form `left ∧ right → ...`, so it can be
+        // elaborated lazily.
+
         let mut try_one_direction =
             |left_constraint: ConstraintId, right_constraint: ConstraintId| {
                 let left_constraint_data = builder.constraint_data(left_constraint);
@@ -6334,6 +6436,12 @@ impl SequentMap {
         left_constraint: ConstraintId,
         right_constraint: ConstraintId,
     ) {
+        // This method creates some sequents of the form `left ∧ right → ...`, which could be
+        // elaborated lazily. However, it also creates other constraints that do _not_ follow that
+        // form, and which must be elaborated eagerly. Since we've already done the work needed to
+        // determine whether to create the eager sequents, we go ahead and create the corresponding
+        // technically-could-be-lazy sequents here as well.
+
         // These might seem redundant with the intersection check below, since `a → b` means that
         // `a ∧ b = a`. But we are not normalizing constraint bounds, and these clauses help us
         // identify constraints that are identical besides e.g. ordering of union/intersection
@@ -6522,6 +6630,8 @@ pub(crate) struct PathAssignments {
     /// Constraints that we have elaborated (adding any sequents derivable via them to set of
     /// available `sequents` )
     elaborated: FxIndexSet<ConstraintId>,
+    /// Lazy constraint pairs that we have elaborated
+    elaborated_lazy_pairs: FxIndexSet<(ConstraintId, ConstraintId)>,
     /// Derived assignments that have been queued up to add because of the most recent BDD
     /// assignment
     assignment_queue: VecDeque<(ConstraintAssignment, AssignmentFuel)>,
@@ -6575,6 +6685,7 @@ impl PathAssignments {
             additional_fuels: Vec::default(),
             discovered,
             elaborated: FxIndexSet::default(),
+            elaborated_lazy_pairs: FxIndexSet::default(),
             remaining_overall_fuel: OVERALL_FUEL_BUDGET,
             assignment_queue: VecDeque::default(),
         }
@@ -6618,6 +6729,7 @@ impl PathAssignments {
         let previous_remaining_overall_fuel = self.remaining_overall_fuel;
         let discovered_start = self.discovered.len();
         let elaborated_start = self.elaborated.len();
+        let elaborated_lazy_pairs_start = self.elaborated_lazy_pairs.len();
 
         // Add the new assignment and anything we can derive from it.
         tracing::trace!(
@@ -6668,6 +6780,8 @@ impl PathAssignments {
         self.remaining_overall_fuel = previous_remaining_overall_fuel;
         self.discovered.truncate(discovered_start);
         self.elaborated.truncate(elaborated_start);
+        self.elaborated_lazy_pairs
+            .truncate(elaborated_lazy_pairs_start);
         result
     }
 
@@ -6703,17 +6817,23 @@ impl PathAssignments {
     }
 
     /// Update our sequent map to ensure that it holds all of the sequents that involve the given
-    /// constraint. We do not calculate the new sequents directly. Instead, we call
-    /// [`SequentMap::for_constraint`] and [`for_constraint_pair`][SequentMap::for_constraint_pair]
-    /// to calculate _and cache_ the constraints, so that if we walk another constraint set
-    /// containing this constraint, we reuse the work to calculate its sequents.
-    fn discover_constraint<'db>(
+    /// assignment.
+    fn discover_assignment<'db>(
         &mut self,
         db: &'db dyn Db,
         builder: &ConstraintSetBuilder<'db>,
-        constraint: ConstraintId,
+        assignment: ConstraintAssignment,
     ) {
+        fn minmax(a: ConstraintId, b: ConstraintId) -> (ConstraintId, ConstraintId) {
+            if a.ordering() < b.ordering() {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        }
+
         // If we've already processed this constraint, we can skip it.
+        let constraint = assignment.constraint();
         self.discovered.insert(constraint);
         let already_elaborated = !self.elaborated.insert(constraint);
         if already_elaborated {
@@ -6724,12 +6844,40 @@ impl PathAssignments {
         self.sequents.extend_from_slice(&single_map.sequents);
         drop(single_map);
 
+        // Elaborate the _eager_ pair sequents for this constraint and every other constraint
+        // discovered so far.
         for existing in &self.discovered {
             if *existing == constraint {
                 continue;
             }
-            let pair_map = SequentMap::for_constraint_pair(db, builder, *existing, constraint);
+            let pair_map =
+                SequentMap::for_eager_constraint_pair(db, builder, *existing, constraint);
             self.sequents.extend_from_slice(&pair_map.sequents);
+        }
+
+        // If this constraint _holds_ on this path, also elaborate any _lazy_ pair sequents for
+        // this constraint and every other positive assignment on the path.
+        if assignment.is_positive() {
+            for (existing_assignment, _) in &self.assignments {
+                if !existing_assignment.is_positive() {
+                    continue;
+                }
+
+                let existing = existing_assignment.constraint();
+                if existing == constraint {
+                    continue;
+                }
+
+                let key = minmax(existing, constraint);
+                let already_elaborated = !self.elaborated_lazy_pairs.insert(key);
+                if already_elaborated {
+                    continue;
+                }
+
+                let pair_map =
+                    SequentMap::for_lazy_constraint_pair(db, builder, existing, constraint);
+                self.sequents.extend_from_slice(&pair_map.sequents);
+            }
         }
     }
 
@@ -6879,7 +7027,7 @@ impl PathAssignments {
         }
 
         // Then discover and elaborate any new sequents from this assignment.
-        self.discover_constraint(db, builder, assignment.constraint());
+        self.discover_assignment(db, builder, assignment);
 
         // And apply each of those sequents if possible.
         for i in existing..self.sequents.len() {
@@ -7461,11 +7609,12 @@ mod tests {
         );
         let inferable =
             InferableTypeVars::from_typevars(&db, std::iter::once(t.identity(&db)).collect());
-        let (single_sequents, pair_sequents) = {
+        let (single_sequents, eager_pair_sequents, lazy_pair_sequents) = {
             let storage = builder.storage.borrow();
             (
                 storage.single_sequent_cache.len(),
-                storage.pair_sequent_cache.len(),
+                storage.eager_pair_sequent_cache.len(),
+                storage.lazy_pair_sequent_cache.len(),
             )
         };
 
@@ -7480,7 +7629,8 @@ mod tests {
 
         let storage = builder.storage.borrow();
         assert_eq!(storage.single_sequent_cache.len(), single_sequents);
-        assert_eq!(storage.pair_sequent_cache.len(), pair_sequents);
+        assert_eq!(storage.eager_pair_sequent_cache.len(), eager_pair_sequents);
+        assert_eq!(storage.lazy_pair_sequent_cache.len(), lazy_pair_sequents);
     }
 
     #[test]
@@ -7498,11 +7648,12 @@ mod tests {
             &db,
             [t.identity(&db), u.identity(&db)].into_iter().collect(),
         );
-        let (single_sequents, pair_sequents) = {
+        let (single_sequents, eager_pair_sequents, lazy_pair_sequents) = {
             let storage = builder.storage.borrow();
             (
                 storage.single_sequent_cache.len(),
-                storage.pair_sequent_cache.len(),
+                storage.eager_pair_sequent_cache.len(),
+                storage.lazy_pair_sequent_cache.len(),
             )
         };
 
@@ -7522,7 +7673,8 @@ mod tests {
 
         let storage = builder.storage.borrow();
         assert_eq!(storage.single_sequent_cache.len(), single_sequents);
-        assert_eq!(storage.pair_sequent_cache.len(), pair_sequents);
+        assert_eq!(storage.eager_pair_sequent_cache.len(), eager_pair_sequents);
+        assert_eq!(storage.lazy_pair_sequent_cache.len(), lazy_pair_sequents);
     }
 
     #[test]
@@ -7538,11 +7690,12 @@ mod tests {
             });
         let inferable =
             InferableTypeVars::from_typevars(&db, std::iter::once(t.identity(&db)).collect());
-        let (single_sequents, pair_sequents) = {
+        let (single_sequents, eager_pair_sequents, lazy_pair_sequents) = {
             let storage = builder.storage.borrow();
             (
                 storage.single_sequent_cache.len(),
-                storage.pair_sequent_cache.len(),
+                storage.eager_pair_sequent_cache.len(),
+                storage.lazy_pair_sequent_cache.len(),
             )
         };
 
@@ -7553,7 +7706,8 @@ mod tests {
 
         let storage = builder.storage.borrow();
         assert_eq!(storage.single_sequent_cache.len(), single_sequents);
-        assert_eq!(storage.pair_sequent_cache.len(), pair_sequents);
+        assert_eq!(storage.eager_pair_sequent_cache.len(), eager_pair_sequents);
+        assert_eq!(storage.lazy_pair_sequent_cache.len(), lazy_pair_sequents);
     }
 
     #[test]
