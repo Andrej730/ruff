@@ -101,7 +101,7 @@ pub use crate::types::typevar::{
 pub use crate::types::variance::TypeVarVariance;
 use crate::types::variance::VarianceInferable;
 use crate::types::visitor::any_over_type;
-use crate::{Db, FxOrderSet, Program};
+use crate::{Db, FxOrderSet};
 pub(crate) use class::{ClassLiteral, ClassType, GenericAlias, StaticClassLiteral};
 pub use class::{KnownClass, MethodDecorator};
 use instance::Protocol;
@@ -4164,9 +4164,9 @@ impl<'db> Type<'db> {
                     .member_lookup_with_policy_and_receiver(db, name_str, policy, receiver),
 
                 Type::NominalInstance(instance)
-                    if matches!(name_str, "major" | "minor") && instance.is_sys_version_info() =>
+                    if matches!(name_str, "major" | "minor")
+                        && let Some(python_version) = instance.sys_version_info() =>
                 {
-                    let python_version = Program::get(db).python_version(db);
                     let segment = if name == "major" {
                         python_version.major
                     } else {

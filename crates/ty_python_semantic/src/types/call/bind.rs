@@ -71,7 +71,7 @@ use crate::types::{
     TypeAliasType, TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarVariance,
     UnionAccumulator, UnionBuilder, UnionType, WrapperDescriptorKind, enums, list_members,
 };
-use crate::{DisplaySettings, FxOrderSet, Program};
+use crate::{DisplaySettings, FxOrderSet};
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span, SubDiagnostic, SubDiagnosticSeverity};
 use ruff_python_ast::{self as ast, AnyNodeRef, ArgOrKeyword, PythonVersion};
 use ty_python_core::semantic_index;
@@ -1880,7 +1880,8 @@ impl<'db> Bindings<'db> {
                             .map(|init| !init.bool(db).is_always_false())
                             .unwrap_or(true);
 
-                        let kw_only = if Program::get(db).python_version(db) >= PythonVersion::PY310
+                        let kw_only = if function_type.python_file(db).python_version(db)
+                            >= PythonVersion::PY310
                         {
                             match kw_only.and_then(Type::as_literal_value_kind) {
                                 // We are more conservative here when turning the type for `kw_only`
@@ -2548,9 +2549,13 @@ impl<'db> Bindings<'db> {
                                 continue;
                             };
 
-                            let return_type = parse_struct_format(db, format_literal.value(db))
-                                .map(|elements| Type::heterogeneous_tuple(db, elements))
-                                .unwrap_or_else(|| Type::homogeneous_tuple(db, Type::unknown()));
+                            let python_version = function_type.python_file(db).python_version(db);
+                            let return_type =
+                                parse_struct_format(db, python_version, format_literal.value(db))
+                                    .map(|elements| Type::heterogeneous_tuple(db, elements))
+                                    .unwrap_or_else(|| {
+                                        Type::homogeneous_tuple(db, Type::unknown())
+                                    });
 
                             overload.set_return_type(return_type);
                         }
@@ -8207,7 +8212,11 @@ const STRUCT_FORMAT_MAX_REPETITION: usize = 32;
 ///
 /// Returns `None` if the format contains unsupported specifiers or
 /// repetition counts exceed the limit, indicating a fallback to `tuple[Unknown, ...]`.
-fn parse_struct_format<'db>(db: &'db dyn Db, format_string: &str) -> Option<Vec<Type<'db>>> {
+fn parse_struct_format<'db>(
+    db: &'db dyn Db,
+    python_version: PythonVersion,
+    format_string: &str,
+) -> Option<Vec<Type<'db>>> {
     // Strip the byte order/size/alignment prefix
     let format = format_string.trim_start_matches(['@', '=', '<', '>', '!']);
     let mut chars = format.chars().peekable();
@@ -8242,7 +8251,7 @@ fn parse_struct_format<'db>(db: &'db dyn Db, format_string: &str) -> Option<Vec<
             }
             '?' => (KnownClass::Bool.to_instance(db), count),
             'e' | 'f' | 'd' => (KnownClass::Float.to_instance(db), count),
-            'F' | 'D' if Program::get(db).python_version(db) >= PythonVersion::PY314 => {
+            'F' | 'D' if python_version >= PythonVersion::PY314 => {
                 (KnownClass::Complex.to_instance(db), count)
             }
             _ => return None,

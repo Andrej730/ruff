@@ -1313,7 +1313,10 @@ fn symbol_impl<'db>(
     if matches!(name, "version_info" | "platform") && is_known_module(KnownModule::Sys) {
         match name {
             "version_info" => {
-                return Place::bound(Type::sys_version_info()).into();
+                return Place::bound(Type::sys_version_info(
+                    scope.python_file(db).python_version(db),
+                ))
+                .into();
             }
             "platform" => match Program::get(db).python_platform(db) {
                 crate::PythonPlatform::Identifier(platform) => {
