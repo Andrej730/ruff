@@ -4612,22 +4612,21 @@ impl<'db> Type<'db> {
                 ty: keys_method,
                 definedness: Definedness::AlwaysDefined,
                 ..
-            }) => keys_method
-                .try_call(
-                    db,
-                    crate::Program::get(db).python_version(db),
-                    &CallArguments::none(),
-                )
-                .ok()
-                .and_then(|bindings| {
-                    Some(
-                        bindings
-                            .return_type(db)
-                            .try_iterate(db)
-                            .ok()?
-                            .homogeneous_element_type(db),
-                    )
-                })?,
+            }) => {
+                let python_version = crate::Program::get(db).python_version(db);
+                keys_method
+                    .try_call(db, python_version, &CallArguments::none())
+                    .ok()
+                    .and_then(|bindings| {
+                        Some(
+                            bindings
+                                .return_type(db)
+                                .try_iterate(db, python_version)
+                                .ok()?
+                                .homogeneous_element_type(db),
+                        )
+                    })?
+            }
 
             _ => return None,
         };
@@ -5671,7 +5670,7 @@ impl<'db> Type<'db> {
     ) -> Result<Bindings<'db>, CallError<'db>> {
         let constraints = ConstraintSetBuilder::new();
         self.bindings(db, python_version)
-            .match_parameters(db, argument_types)
+            .match_parameters(db, python_version, argument_types)
             .check_types(
                 db,
                 python_version,
@@ -5755,7 +5754,7 @@ impl<'db> Type<'db> {
                 let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
                     .bindings(db, python_version)
-                    .match_parameters(db, argument_types)
+                    .match_parameters(db, python_version, argument_types)
                     .check_types(db, python_version, &constraints, argument_types, tcx, &[]);
 
                 let bindings = match bindings {
@@ -5802,7 +5801,7 @@ impl<'db> Type<'db> {
                 let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
                     .bindings(db, python_version)
-                    .match_parameters(db, argument_types)
+                    .match_parameters(db, python_version, argument_types)
                     .check_types(db, python_version, &constraints, argument_types, tcx, &[]);
 
                 let bindings = match bindings {
@@ -5949,10 +5948,14 @@ impl<'db> Type<'db> {
     }
 
     /// Resolve the type of an `await …` expression where `self` is the type of the awaitable.
-    fn try_await(self, db: &'db dyn Db) -> Result<Type<'db>, AwaitError<'db>> {
+    fn try_await(
+        self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> Result<Type<'db>, AwaitError<'db>> {
         let await_result = self.try_call_dunder(
             db,
-            crate::Program::get(db).python_version(db),
+            python_version,
             "__await__",
             CallArguments::none(),
             TypeContext::default(),
@@ -7761,7 +7764,7 @@ impl<'db> UnionType<'db> {
         let constraints = ConstraintSetBuilder::new();
         let bindings = match dunder_callable
             .bindings(db, python_version)
-            .match_parameters(db, argument_types)
+            .match_parameters(db, python_version, argument_types)
             .check_types(db, python_version, &constraints, argument_types, tcx, &[])
         {
             Ok(bindings) => bindings,

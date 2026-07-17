@@ -212,7 +212,12 @@ fn divergent_type() {
     );
     assert!(
         top_div
-            .subscript(&db, Type::int_literal(0), ast::ExprContext::Load)
+            .subscript(
+                &db,
+                crate::Program::get(&db).python_version(&db),
+                Type::int_literal(0),
+                ast::ExprContext::Load,
+            )
             .is_err()
     );
     assert_eq!(top_div.recursive_type_normalized_impl(&db, div, true), None);

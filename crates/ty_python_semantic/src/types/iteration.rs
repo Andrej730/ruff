@@ -13,7 +13,7 @@ use crate::{
 };
 use compact_str::ToCompactString;
 use ruff_db::PythonFile;
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 use std::borrow::Cow;
 use ty_python_core::EvaluationMode;
 
@@ -23,11 +23,13 @@ use ty_python_core::EvaluationMode;
 /// recursively unpacking starred elements whose iterables are also fixed-length.
 pub(crate) fn extract_fixed_length_iterable_element_types<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     iterable: &ast::Expr,
     mut expression_type: impl FnMut(&ast::Expr) -> Type<'db>,
 ) -> Option<Box<[Type<'db>]>> {
     fn extend_fixed_length_iterable<'db>(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         iterable: &ast::Expr,
         expression_type: &mut impl FnMut(&ast::Expr) -> Type<'db>,
         element_types: &mut Vec<Type<'db>>,
@@ -43,6 +45,7 @@ pub(crate) fn extract_fixed_length_iterable_element_types<'db>(
                 if let ast::Expr::Starred(starred) = element {
                     extend_fixed_length_iterable(
                         db,
+                        python_version,
                         starred.value.as_ref(),
                         expression_type,
                         element_types,
@@ -55,14 +58,20 @@ pub(crate) fn extract_fixed_length_iterable_element_types<'db>(
         }
 
         let iterable_type = expression_type(iterable);
-        let spec = iterable_type.try_iterate(db).ok()?;
+        let spec = iterable_type.try_iterate(db, python_version).ok()?;
         let tuple = spec.as_fixed_length()?;
         element_types.extend(tuple.all_elements().iter().copied());
         Some(())
     }
 
     let mut element_types = Vec::new();
-    extend_fixed_length_iterable(db, iterable, &mut expression_type, &mut element_types)?;
+    extend_fixed_length_iterable(
+        db,
+        python_version,
+        iterable,
+        &mut expression_type,
+        &mut element_types,
+    )?;
     Some(element_types.into_boxed_slice())
 }
 
@@ -71,9 +80,16 @@ impl<'db> Type<'db> {
     ///
     /// This method should only be used outside of type checking because it omits any errors.
     /// For type checking, use [`try_iterate`](Self::try_iterate) instead.
-    pub(super) fn iterate(self, db: &'db dyn Db) -> Cow<'db, TupleSpec<'db>> {
-        self.try_iterate(db)
-            .unwrap_or_else(|err| Cow::Owned(TupleSpec::homogeneous(err.fallback_element_type(db))))
+    pub(super) fn iterate(
+        self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> Cow<'db, TupleSpec<'db>> {
+        self.try_iterate(db, python_version).unwrap_or_else(|err| {
+            Cow::Owned(TupleSpec::homogeneous(
+                err.fallback_element_type(db, python_version),
+            ))
+        })
     }
 
     /// Given the type of an object that is iterated over in some way,
@@ -87,17 +103,20 @@ impl<'db> Type<'db> {
     pub(super) fn try_iterate(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
     ) -> Result<Cow<'db, TupleSpec<'db>>, IterationError<'db>> {
-        self.try_iterate_with_mode(db, EvaluationMode::Sync)
+        self.try_iterate_with_mode(db, python_version, EvaluationMode::Sync)
     }
 
     pub(super) fn try_iterate_with_mode(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         mode: EvaluationMode,
     ) -> Result<Cow<'db, TupleSpec<'db>>, IterationError<'db>> {
         fn non_async_special_case<'db>(
             db: &'db dyn Db,
+            python_version: PythonVersion,
             ty: Type<'db>,
         ) -> Option<Cow<'db, TupleSpec<'db>>> {
             // We will not infer precise heterogeneous tuple specs for literals with lengths above this threshold.
@@ -108,7 +127,9 @@ impl<'db> Type<'db> {
 
             match ty {
                 Type::NominalInstance(nominal) => nominal.tuple_spec(db),
-                Type::NewTypeInstance(newtype) => non_async_special_case(db, newtype.concrete_base_type(db)),
+                Type::NewTypeInstance(newtype) => {
+                    non_async_special_case(db, python_version, newtype.concrete_base_type(db))
+                }
                 Type::GenericAlias(alias) if alias.origin(db).is_tuple(db) => {
                     Some(Cow::Owned(TupleSpec::homogeneous(todo_type!(
                         "*tuple[] annotations"
@@ -124,7 +145,9 @@ impl<'db> Type<'db> {
                                     .map(|b| Type::int_literal( i64::from(*b))),
                             )
                         } else {
-                            TupleSpec::homogeneous(KnownClass::Int.to_instance(db))
+                            TupleSpec::homogeneous(
+                                KnownClass::Int.to_instance_with_version(db, python_version),
+                            )
                         };
                         Some(Cow::Owned(spec))
                     },
@@ -156,22 +179,32 @@ impl<'db> Type<'db> {
                     Some(Cow::Owned(TupleSpec::homogeneous(Type::unknown())))
                 }
                 Type::TypeAlias(alias) => {
-                    non_async_special_case(db, alias.value_type(db))
+                    non_async_special_case(db, python_version, alias.value_type(db))
                 }
                 Type::TypeVar(tvar) => match tvar.typevar(db).bound_or_constraints(db)? {
                     TypeVarBoundOrConstraints::UpperBound(bound) => {
-                        non_async_special_case(db, bound)
+                        non_async_special_case(db, python_version, bound)
                     }
-                    TypeVarBoundOrConstraints::Constraints(constraints) => non_async_special_case(db, constraints.as_type(db)),
+                    TypeVarBoundOrConstraints::Constraints(constraints) => {
+                        non_async_special_case(db, python_version, constraints.as_type(db))
+                    }
                 },
                 Type::Union(union) => {
                     let elements = union.elements(db);
                     if elements.len() < MAX_TUPLE_LENGTH {
                         let mut elements_iter = elements.iter();
-                        let first_element_spec = elements_iter.next()?.try_iterate_with_mode(db, EvaluationMode::Sync).ok()?;
+                        let first_element_spec = elements_iter
+                            .next()?
+                            .try_iterate_with_mode(db, python_version, EvaluationMode::Sync)
+                            .ok()?;
                         let mut builder = TupleSpecBuilder::from(&*first_element_spec);
                         for element in elements_iter {
-                            builder = builder.union(db, &*element.try_iterate_with_mode(db, EvaluationMode::Sync).ok()?);
+                            builder = builder.union(
+                                db,
+                                &*element
+                                    .try_iterate_with_mode(db, python_version, EvaluationMode::Sync)
+                                    .ok()?,
+                            );
                         }
                         Some(Cow::Owned(builder.build()))
                     } else {
@@ -197,7 +230,11 @@ impl<'db> Type<'db> {
                     // If flattening didn't change anything, iterate the intersection directly.
                     if flattened == ty {
                         let mut specs_iter = intersection.positive_elements_or_object(db).filter_map(
-                            |element| element.try_iterate_with_mode(db, EvaluationMode::Sync).ok(),
+                            |element| {
+                                element
+                                    .try_iterate_with_mode(db, python_version, EvaluationMode::Sync)
+                                    .ok()
+                            },
                         );
                         let first_spec = specs_iter.next()?;
                         let mut builder = TupleSpecBuilder::from(&*first_spec);
@@ -214,10 +251,10 @@ impl<'db> Type<'db> {
                     }
 
                     // Flattening changed the type; recursively iterate the flattened result.
-                    flattened.try_iterate(db).ok()
+                    flattened.try_iterate(db, python_version).ok()
                 }
                 Type::EnumComplement(complement) => {
-                    non_async_special_case(db, complement.remaining_literal_union(db))
+                    non_async_special_case(db, python_version, complement.remaining_literal_union(db))
                 }
                 // N.B. This special case isn't strictly necessary, it's just an obvious optimization
                 Type::Dynamic(_) => Some(Cow::Owned(TupleSpec::homogeneous(ty))),
@@ -256,7 +293,7 @@ impl<'db> Type<'db> {
             if let Type::Intersection(_) = self {
                 let flattened = self.flatten_typevars(db);
                 if flattened != self {
-                    return flattened.try_iterate_with_mode(db, mode);
+                    return flattened.try_iterate_with_mode(db, python_version, mode);
                 }
             }
 
@@ -267,17 +304,21 @@ impl<'db> Type<'db> {
                 iterator
                     .try_call_dunder(
                         db,
-                        crate::Program::get(db).python_version(db),
+                        python_version,
                         "__anext__",
                         CallArguments::none(),
                         TypeContext::default(),
                     )
-                    .map(|dunder_anext_outcome| dunder_anext_outcome.return_type(db).try_await(db))
+                    .map(|dunder_anext_outcome| {
+                        dunder_anext_outcome
+                            .return_type(db)
+                            .try_await(db, python_version)
+                    })
             };
 
             return match self.try_call_dunder(
                 db,
-                crate::Program::get(db).python_version(db),
+                python_version,
                 "__aiter__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -329,16 +370,18 @@ impl<'db> Type<'db> {
             };
         }
 
-        if let Some(special_case) = non_async_special_case(db, self) {
+        if let Some(special_case) = non_async_special_case(db, python_version, self) {
             return Ok(special_case);
         }
 
         let try_call_dunder_getitem = || {
             self.try_call_dunder(
                 db,
-                crate::Program::get(db).python_version(db),
+                python_version,
                 "__getitem__",
-                CallArguments::positional([KnownClass::Int.to_instance(db)]),
+                CallArguments::positional([
+                    KnownClass::Int.to_instance_with_version(db, python_version)
+                ]),
                 TypeContext::default(),
             )
             .map(|dunder_getitem_outcome| dunder_getitem_outcome.return_type(db))
@@ -348,7 +391,7 @@ impl<'db> Type<'db> {
             iterator
                 .try_call_dunder(
                     db,
-                    crate::Program::get(db).python_version(db),
+                    python_version,
                     "__next__",
                     CallArguments::none(),
                     TypeContext::default(),
@@ -359,7 +402,7 @@ impl<'db> Type<'db> {
         let dunder_iter_result = self
             .try_call_dunder(
                 db,
-                crate::Program::get(db).python_version(db),
+                python_version,
                 "__iter__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -494,12 +537,17 @@ pub(super) enum IterationError<'db> {
 }
 
 impl<'db> IterationError<'db> {
-    pub(super) fn fallback_element_type(&self, db: &'db dyn Db) -> Type<'db> {
-        self.element_type(db).unwrap_or(Type::unknown())
+    pub(super) fn fallback_element_type(
+        &self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> Type<'db> {
+        self.element_type(db, python_version)
+            .unwrap_or(Type::unknown())
     }
 
     /// Returns the element type if it is known, or `None` if the type is never iterable.
-    fn element_type(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+    fn element_type(&self, db: &'db dyn Db, python_version: PythonVersion) -> Option<Type<'db>> {
         let return_type = |result: Result<Bindings<'db>, CallDunderError<'db>>| {
             result
                 .map(|outcome| Some(outcome.return_type(db)))
@@ -511,7 +559,7 @@ impl<'db> IterationError<'db> {
                 dunder_error, mode, ..
             } => dunder_error.return_type(db).and_then(|ty| {
                 if mode.is_async() {
-                    ty.try_await(db).ok()
+                    ty.try_await(db, python_version).ok()
                 } else {
                     Some(ty)
                 }
@@ -525,16 +573,16 @@ impl<'db> IterationError<'db> {
                 if mode.is_async() {
                     return_type(dunder_iter_bindings.return_type(db).try_call_dunder(
                         db,
-                        crate::Program::get(db).python_version(db),
+                        python_version,
                         "__anext__",
                         CallArguments::none(),
                         TypeContext::default(),
                     ))
-                    .and_then(|ty| ty.try_await(db).ok())
+                    .and_then(|ty| ty.try_await(db, python_version).ok())
                 } else {
                     return_type(dunder_iter_bindings.return_type(db).try_call_dunder(
                         db,
-                        crate::Program::get(db).python_version(db),
+                        python_version,
                         "__next__",
                         CallArguments::none(),
                         TypeContext::default(),

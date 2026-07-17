@@ -324,7 +324,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         UnionTypeInstance::new(
                             db,
                             None,
-                            Ok(UnionType::from_two_elements(db, ty, Type::none(db))),
+                            Ok(UnionType::from_two_elements(
+                                db,
+                                ty,
+                                Type::none_with_version(db, self.python_version()),
+                            )),
                         ),
                     ));
                 }
@@ -1466,7 +1470,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let generic_context = GenericContext::from_typevar_instances(db, variables);
                 Ok(Type::Dynamic(DynamicType::UnknownGeneric(generic_context)))
             }
-            _ => value_ty.subscript(db, slice_ty, expr_context),
+            _ => value_ty.subscript(db, self.python_version(), slice_ty, expr_context),
         };
 
         subscript_result.unwrap_or_else(|e| {
@@ -1494,9 +1498,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             db,
             self.python_version(),
             &[
-                ty_lower.unwrap_or_else(|| Type::none(db)),
-                ty_upper.unwrap_or_else(|| Type::none(db)),
-                ty_step.unwrap_or_else(|| Type::none(db)),
+                ty_lower.unwrap_or_else(|| Type::none_with_version(db, self.python_version())),
+                ty_upper.unwrap_or_else(|| Type::none_with_version(db, self.python_version())),
+                ty_step.unwrap_or_else(|| Type::none_with_version(db, self.python_version())),
             ],
         )
     }
@@ -1560,9 +1564,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 )
                 .place
             {
+                let python_version = self.python_version();
                 let mut identity_bindings = dunder_callable
-                    .bindings(db, self.python_version())
-                    .match_parameters(db, &call_arguments)
+                    .bindings(db, python_version)
+                    .match_parameters(db, python_version, &call_arguments)
                     // Perform inference against the type variables on the receiver's generic context.
                     .with_generic_context(db, collection_generic_context);
 

@@ -199,7 +199,8 @@ impl<'db> DynamicClassLiteral<'db> {
             db: &'db dyn Db,
             definition: Definition<'db>,
         ) -> Box<[Type<'db>]> {
-            let module = parsed_module(db, definition.python_file(db)).load(db);
+            let python_file = definition.python_file(db);
+            let module = parsed_module(db, python_file).load(db);
 
             let value = definition
                 .kind(db)
@@ -214,9 +215,12 @@ impl<'db> DynamicClassLiteral<'db> {
             };
 
             // Use `definition_expression_type` for deferred inference support.
-            extract_fixed_length_iterable_element_types(db, bases_arg, |expr| {
-                definition_expression_type(db, definition, expr)
-            })
+            extract_fixed_length_iterable_element_types(
+                db,
+                python_file.python_version(db),
+                bases_arg,
+                |expr| definition_expression_type(db, definition, expr),
+            )
             .unwrap_or_else(|| Box::from([Type::unknown()]))
         }
 

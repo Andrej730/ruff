@@ -67,14 +67,19 @@ impl<'db> ConstructorBinding<'db> {
     }
 
     /// Match parameters for this constructor method and downstream constructors.
-    pub(super) fn match_parameters(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
-        self.entry.match_parameters(db, arguments);
+    pub(super) fn match_parameters(
+        &mut self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        arguments: &CallArguments<'_, 'db>,
+    ) {
+        self.entry.match_parameters(db, python_version, arguments);
 
         // We don't know at this point whether we'll need to check downstream constructors or not
         // (since we can't resolve return types yet), so we match parameters for all downstream
         // constructors; this may be needed for argument type contexts.
         if let Some(downstream) = self.downstream_constructor.as_mut() {
-            downstream.match_parameters_in_place(db, arguments);
+            downstream.match_parameters_in_place(db, python_version, arguments);
         }
     }
 

@@ -251,10 +251,19 @@ impl<'db> CallableItem<'db> {
         }
     }
 
-    fn match_parameters(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
+    fn match_parameters(
+        &mut self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        arguments: &CallArguments<'_, 'db>,
+    ) {
         match self {
-            CallableItem::Regular(binding) => binding.match_parameters(db, arguments),
-            CallableItem::Constructor(binding) => binding.match_parameters(db, arguments),
+            CallableItem::Regular(binding) => {
+                binding.match_parameters(db, python_version, arguments);
+            }
+            CallableItem::Constructor(binding) => {
+                binding.match_parameters(db, python_version, arguments);
+            }
         }
     }
 
@@ -987,7 +996,7 @@ impl<'db> Bindings<'db> {
 
         let mut partial_bindings = wrapped_callable_ty
             .bindings(db, python_version)
-            .match_parameters(db, &bound_call_arguments);
+            .match_parameters(db, python_version, &bound_call_arguments);
         for binding in partial_bindings.iter_flat_mut() {
             binding.clear_missing_argument_errors_for_partial_application();
         }
@@ -1091,17 +1100,23 @@ impl<'db> Bindings<'db> {
     pub(crate) fn match_parameters(
         mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         arguments: &CallArguments<'_, 'db>,
     ) -> Self {
         let nonce_generator = TypeVarNonceGenerator::default();
         self.freshen_generic_contexts_in_place(db, &nonce_generator);
-        self.match_parameters_in_place(db, arguments);
+        self.match_parameters_in_place(db, python_version, arguments);
         self
     }
 
-    fn match_parameters_in_place(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
+    fn match_parameters_in_place(
+        &mut self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        arguments: &CallArguments<'_, 'db>,
+    ) {
         for item in self.iter_callable_items_mut() {
-            item.match_parameters(db, arguments);
+            item.match_parameters(db, python_version, arguments);
         }
     }
 
@@ -2982,10 +2997,16 @@ impl<'db> Bindings<'db> {
                                 // need to be able to handle it without crashing.
                                 let return_type = if let Type::Union(union) = argument {
                                     union.map(db, |element| {
-                                        Type::tuple(TupleType::new(db, &element.iterate(db)))
+                                        Type::tuple(TupleType::new(
+                                            db,
+                                            &element.iterate(db, python_version),
+                                        ))
                                     })
                                 } else {
-                                    Type::tuple(TupleType::new(db, &argument.iterate(db)))
+                                    Type::tuple(TupleType::new(
+                                        db,
+                                        &argument.iterate(db, python_version),
+                                    ))
                                 };
                                 overload.set_return_type(return_type);
                             }
@@ -3418,13 +3439,18 @@ impl<'db> CallableBinding<'db> {
         }
     }
 
-    fn match_parameters(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
+    fn match_parameters(
+        &mut self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        arguments: &CallArguments<'_, 'db>,
+    ) {
         // If this callable is a bound method, prepend the self instance onto the arguments list
         // before checking.
         let bound_arguments = arguments.with_self(self.bound_type);
 
         for overload in &mut self.overloads {
-            overload.match_parameters(db, bound_arguments.as_ref());
+            overload.match_parameters(db, python_version, bound_arguments.as_ref());
         }
     }
 
@@ -3665,7 +3691,7 @@ impl<'db> CallableBinding<'db> {
                 for overload in &mut self.overloads {
                     // Clear the state of all overloads before re-evaluating from step 1
                     overload.reset(db);
-                    overload.match_parameters(db, expanded_arguments);
+                    overload.match_parameters(db, python_version, expanded_arguments);
                 }
 
                 tracing::trace!(
@@ -4435,6 +4461,7 @@ struct ParameterInfo {
 }
 
 struct ArgumentMatcher<'a, 'db> {
+    python_version: PythonVersion,
     arguments: &'a CallArguments<'a, 'db>,
     parameters: &'a Parameters<'db>,
     errors: &'a mut Vec<BindingError<'db>>,
@@ -4455,6 +4482,7 @@ struct ArgumentMatcher<'a, 'db> {
 
 impl<'a, 'db> ArgumentMatcher<'a, 'db> {
     fn new(
+        python_version: PythonVersion,
         arguments: &'a CallArguments<'a, 'db>,
         parameters: &'a Parameters<'db>,
         errors: &'a mut Vec<BindingError<'db>>,
@@ -4471,6 +4499,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             .collect();
 
         Self {
+            python_version,
             arguments,
             parameters,
             errors,
@@ -4676,8 +4705,11 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                         if self.parameters.variadic().is_none()
                             && !self.has_later_positional_input(argument_index) =>
                     {
-                        let tuple_specs: Vec<_> =
-                            union.elements(db).iter().map(|ty| ty.iterate(db)).collect();
+                        let tuple_specs: Vec<_> = union
+                            .elements(db)
+                            .iter()
+                            .map(|ty| ty.iterate(db, self.python_version))
+                            .collect();
 
                         let min_len = tuple_specs
                             .iter()
@@ -4731,7 +4763,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                         }
                     }
                     _ => {
-                        let tuple = argument_type.iterate(db);
+                        let tuple = argument_type.iterate(db, self.python_version);
                         VariadicArgumentType::Other {
                             argument_types: tuple.iter_element_types(db).collect(),
                             length: tuple.len(),
@@ -5806,7 +5838,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         let callable_binding =
             CallableBinding::from_overloads(self.signature_type, signatures.iter().cloned());
         let bindings = match Bindings::from(callable_binding)
-            .match_parameters(self.db, &sub_arguments)
+            .match_parameters(self.db, self.python_version, &sub_arguments)
             .check_types(
                 self.db,
                 self.python_version,
@@ -6390,8 +6422,11 @@ impl<'db> Binding<'db> {
         // fixpoint iteration.
         sub_arguments.clear_types(sub_argument_index);
 
-        let mut specialized_bindings =
-            Bindings::from(specialized_binding).match_parameters(db, &sub_arguments);
+        let mut specialized_bindings = Bindings::from(specialized_binding).match_parameters(
+            db,
+            python_version,
+            &sub_arguments,
+        );
         let _ = specialized_bindings.check_types_impl(
             db,
             python_version,
@@ -6633,9 +6668,15 @@ impl<'db> Binding<'db> {
         self.return_ty = self.initial_return_type(db);
     }
 
-    fn match_parameters(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
+    fn match_parameters(
+        &mut self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        arguments: &CallArguments<'_, 'db>,
+    ) {
         let parameters = self.signature.parameters();
-        let mut matcher = ArgumentMatcher::new(arguments, parameters, &mut self.errors);
+        let mut matcher =
+            ArgumentMatcher::new(python_version, arguments, parameters, &mut self.errors);
         let mut keywords_arguments = vec![];
         for (argument_index, (argument, argument_types)) in arguments.iter().enumerate() {
             match argument {

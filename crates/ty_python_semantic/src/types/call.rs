@@ -4,7 +4,7 @@ use crate::Db;
 use crate::place::Provenance;
 use crate::types::call::bind::BindingError;
 use crate::types::{MemberLookupPolicy, PropertyInstanceType};
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 
 mod arguments;
 pub(crate) mod bind;
@@ -104,9 +104,15 @@ impl<'db> Type<'db> {
             op: ast::Operator,
             right_ty: Type<'db>,
         ) -> Option<Type<'db>> {
-            Type::try_call_bin_op(db, left_ty, op, right_ty)
-                .ok()
-                .map(|bindings| bindings.return_type(db))
+            Type::try_call_bin_op(
+                db,
+                crate::Program::get(db).python_version(db),
+                left_ty,
+                op,
+                right_ty,
+            )
+            .ok()
+            .map(|bindings| bindings.return_type(db))
         }
 
         try_call_bin_op_return_type_impl(db, left_ty, op, right_ty)
@@ -114,15 +120,24 @@ impl<'db> Type<'db> {
 
     pub(crate) fn try_call_bin_op(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         left_ty: Type<'db>,
         op: ast::Operator,
         right_ty: Type<'db>,
     ) -> Result<Bindings<'db>, CallBinOpError> {
-        Self::try_call_bin_op_with_policy(db, left_ty, op, right_ty, MemberLookupPolicy::default())
+        Self::try_call_bin_op_with_policy(
+            db,
+            python_version,
+            left_ty,
+            op,
+            right_ty,
+            MemberLookupPolicy::default(),
+        )
     }
 
     pub(crate) fn try_call_bin_op_with_policy(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         left_ty: Type<'db>,
         op: ast::Operator,
         right_ty: Type<'db>,
@@ -145,7 +160,6 @@ impl<'db> Type<'db> {
 
         let left_class = left_ty.to_meta_type(db);
         let right_class = right_ty.to_meta_type(db);
-        let python_version = crate::Program::get(db).python_version(db);
         if reflected_priority != ReflectedMethodPriority::Never {
             let reflected_dunder = op.reflected_dunder();
             let rhs_reflected = right_class.member(db, reflected_dunder).place;

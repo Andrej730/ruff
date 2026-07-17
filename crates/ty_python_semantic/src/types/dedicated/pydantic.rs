@@ -823,7 +823,7 @@ fn lax_input_type_impl<'db>(
                 | KnownClass::Tuple
         )
     ) {
-        let Ok(elements) = field_type.try_iterate(db) else {
+        let Ok(elements) = field_type.try_iterate(db, python_version) else {
             return Type::any();
         };
         let element_type = lax_input_type_impl(

@@ -218,11 +218,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             match arg.id.as_str() {
                 "defaults" if kind.is_collections() => {
                     defaults_kw = Some(kw);
-                    if let Some(element_types) =
-                        extract_fixed_length_iterable_element_types(db, &kw.value, |expr| {
-                            self.expression_type(expr)
-                        })
-                    {
+                    if let Some(element_types) = extract_fixed_length_iterable_element_types(
+                        db,
+                        self.python_version(),
+                        &kw.value,
+                        |expr| self.expression_type(expr),
+                    ) {
                         default_types = element_types.into_vec();
                     } else {
                         // Can't determine individual types; use Any for each element.
@@ -238,7 +239,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         self.python_version(),
                         &[Type::any()],
                     );
-                    let valid_type = UnionType::from_two_elements(db, iterable_any, Type::none(db));
+                    let valid_type = UnionType::from_two_elements(
+                        db,
+                        iterable_any,
+                        Type::none_with_version(db, self.python_version()),
+                    );
                     if !kw_type.is_assignable_to(db, valid_type)
                         && let Some(builder) =
                             self.context.report_lint(&INVALID_ARGUMENT_TYPE, &kw.value)
@@ -276,7 +281,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let valid_type = UnionType::from_two_elements(
                         db,
                         KnownClass::Str.to_instance_with_version(db, self.python_version()),
-                        Type::none(db),
+                        Type::none_with_version(db, self.python_version()),
                     );
                     if !kw_type.is_assignable_to(db, valid_type)
                         && let Some(builder) =
@@ -450,9 +455,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .collect(),
                 )
             } else {
-                extract_fixed_length_iterable_element_types(db, fields_arg, |expr| {
-                    self.expression_type(expr)
-                })
+                extract_fixed_length_iterable_element_types(
+                    db,
+                    self.python_version(),
+                    fields_arg,
+                    |expr| self.expression_type(expr),
+                )
                 .and_then(|field_types| {
                     field_types
                         .iter()

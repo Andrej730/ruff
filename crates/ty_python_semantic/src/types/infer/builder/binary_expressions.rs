@@ -970,6 +970,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 ast::Operator::BitOr,
             ) => Type::try_call_bin_op_with_policy(
                 db,
+                self.python_version(),
                 left_ty,
                 ast::Operator::BitOr,
                 right_ty,

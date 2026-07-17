@@ -13,26 +13,18 @@ impl<'db> Type<'db> {
     ///
     /// This method should only be used outside of type checking because it omits any errors.
     /// For type checking, use [`try_enter_with_mode`](Self::try_enter_with_mode) instead.
-    pub(super) fn enter(self, db: &'db dyn Db) -> Type<'db> {
-        self.try_enter_with_mode(
-            db,
-            crate::Program::get(db).python_version(db),
-            EvaluationMode::Sync,
-        )
-        .unwrap_or_else(|err| err.fallback_enter_type(db))
+    pub(super) fn enter(self, db: &'db dyn Db, python_version: PythonVersion) -> Type<'db> {
+        self.try_enter_with_mode(db, python_version, EvaluationMode::Sync)
+            .unwrap_or_else(|err| err.fallback_enter_type(db))
     }
 
     /// Returns the type bound from a context manager with type `self`.
     ///
     /// This method should only be used outside of type checking because it omits any errors.
     /// For type checking, use [`try_enter_with_mode`](Self::try_enter_with_mode) instead.
-    pub(super) fn aenter(self, db: &'db dyn Db) -> Type<'db> {
-        self.try_enter_with_mode(
-            db,
-            crate::Program::get(db).python_version(db),
-            EvaluationMode::Async,
-        )
-        .unwrap_or_else(|err| err.fallback_enter_type(db))
+    pub(super) fn aenter(self, db: &'db dyn Db, python_version: PythonVersion) -> Type<'db> {
+        self.try_enter_with_mode(db, python_version, EvaluationMode::Async)
+            .unwrap_or_else(|err| err.fallback_enter_type(db))
     }
 
     /// Given the type of an object that is used as a context manager (i.e. in a `with` statement),
@@ -78,7 +70,7 @@ impl<'db> Type<'db> {
             (Ok(enter), Ok(_)) => {
                 let ty = enter.return_type(db);
                 Ok(if mode.is_async() {
-                    ty.try_await(db).unwrap_or(Type::unknown())
+                    ty.try_await(db, python_version).unwrap_or(Type::unknown())
                 } else {
                     ty
                 })
@@ -87,7 +79,7 @@ impl<'db> Type<'db> {
                 let ty = enter.return_type(db);
                 Err(ContextManagerError::Exit {
                     enter_return_type: if mode.is_async() {
-                        ty.try_await(db).unwrap_or(Type::unknown())
+                        ty.try_await(db, python_version).unwrap_or(Type::unknown())
                     } else {
                         ty
                     },

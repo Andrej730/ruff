@@ -1319,7 +1319,8 @@ impl<'db> DefinitionInference<'db> {
         // Eagerly store more precise types for collection literals to avoid an extra
         // cycle iteration, i.e., by inferring `list[Divergent]` instead of `Divergent`.
         if let DefinitionKind::Assignment(assignment) = definition.kind(db) {
-            let module = parsed_module(db, definition.python_file(db)).load(db);
+            let python_file = definition.python_file(db);
+            let module = parsed_module(db, python_file).load(db);
             let known_collection = match assignment.value(&module) {
                 ast::Expr::Set(_) => Some(KnownClass::Set),
                 ast::Expr::List(_) => Some(KnownClass::List),
@@ -1327,9 +1328,10 @@ impl<'db> DefinitionInference<'db> {
                 _ => None,
             };
 
-            if let Some(collection_class) = known_collection
-                .and_then(|known_collection| known_collection.try_to_class_literal(db))
-            {
+            if let Some(collection_class) = known_collection.and_then(|known_collection| {
+                known_collection
+                    .try_to_class_literal_with_version(db, python_file.python_version(db))
+            }) {
                 let divergent_collection = collection_class
                     .apply_specialization(db, |generic_context| {
                         generic_context.repeat_specialization(db, cycle_recovery)

@@ -243,7 +243,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let use_def = self.index.use_def_map(scope_id);
 
                     if can_implicitly_return_none(db, use_def)
-                        && !Type::none(db).is_assignable_to(db, expected_return_ty)
+                        && !Type::none_with_version(db, self.python_version())
+                            .is_assignable_to(db, expected_return_ty)
                     {
                         let no_return = self.return_types_and_ranges.is_empty();
                         report_implicit_return_type(
@@ -286,7 +287,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             let use_def = self.index.use_def_map(scope_id);
             if can_implicitly_return_none(db, use_def)
-                && !Type::none(db).is_assignable_to(db, expected_ty)
+                && !Type::none_with_version(db, self.python_version())
+                    .is_assignable_to(db, expected_ty)
             {
                 let no_return = self.return_types_and_ranges.is_empty();
                 report_implicit_return_type(

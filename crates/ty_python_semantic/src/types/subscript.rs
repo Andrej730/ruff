@@ -4,7 +4,7 @@ use std::fmt::{self, Display};
 
 use compact_str::{CompactString, ToCompactString};
 use itertools::Itertools;
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 
 use crate::Db;
 use crate::subscript::{PyIndex, PySlice};
@@ -479,11 +479,12 @@ where
 // `Unknown` otherwise. This is not naturally representable via synthesized `__getitem__` overloads.
 fn typed_dict_subscript<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     slice_ty: Type<'db>,
 ) -> Result<Type<'db>, SubscriptError<'db>> {
     if let Some(fallback) = slice_ty.materialized_divergent_fallback() {
-        return typed_dict_subscript(db, typed_dict, fallback);
+        return typed_dict_subscript(db, python_version, typed_dict, fallback);
     }
 
     if slice_ty.is_dynamic() {
@@ -495,13 +496,18 @@ fn typed_dict_subscript<'db>(
         .map(|literal| literal.value(db))
     else {
         if typed_dict.explicit_extra_items(db).is_some()
-            && slice_ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
+            && slice_ty.is_assignable_to(
+                db,
+                KnownClass::Str.to_instance_with_version(db, python_version),
+            )
         {
             return Ok(typed_dict.value_type(db));
         }
         let result_ty = if typed_dict.openness(db).is_closed()
-            && slice_ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
-        {
+            && slice_ty.is_assignable_to(
+                db,
+                KnownClass::Str.to_instance_with_version(db, python_version),
+            ) {
             typed_dict.value_type(db)
         } else {
             Type::unknown()
@@ -535,15 +541,16 @@ impl<'db> Type<'db> {
     pub(super) fn subscript(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         slice_ty: Type<'db>,
         expr_context: ast::ExprContext,
     ) -> Result<Type<'db>, SubscriptError<'db>> {
         if let Some(fallback) = self.materialized_divergent_fallback() {
-            return fallback.subscript(db, slice_ty, expr_context);
+            return fallback.subscript(db, python_version, slice_ty, expr_context);
         }
 
         if let Some(fallback) = slice_ty.materialized_divergent_fallback() {
-            return self.subscript(db, fallback, expr_context);
+            return self.subscript(db, python_version, fallback, expr_context);
         }
 
         let value_ty = self;
@@ -552,44 +559,57 @@ impl<'db> Type<'db> {
             (Type::Dynamic(_) | Type::Divergent(_) | Type::Never, _) => Some(Ok(value_ty)),
 
             (Type::TypeAlias(alias), _) => {
-                Some(alias.value_type(db).subscript(db, slice_ty, expr_context))
+                Some(
+                    alias
+                        .value_type(db)
+                        .subscript(db, python_version, slice_ty, expr_context),
+                )
             }
 
             (_, Type::TypeAlias(alias)) => {
-                Some(value_ty.subscript(db, alias.value_type(db), expr_context))
+                Some(value_ty.subscript(db, python_version, alias.value_type(db), expr_context))
             }
 
             (Type::Union(union), _) => Some(map_union_subscript(db, union, |element| {
-                element.subscript(db, slice_ty, expr_context)
+                element.subscript(db, python_version, slice_ty, expr_context)
             })),
 
             (_, Type::Union(union)) => Some(map_union_subscript(db, union, |element| {
-                value_ty.subscript(db, element, expr_context)
+                value_ty.subscript(db, python_version, element, expr_context)
             })),
 
             (Type::EnumComplement(complement), _) => {
-                Some(complement.remaining_literal_union(db).subscript(db, slice_ty, expr_context))
+                Some(
+                    complement
+                        .remaining_literal_union(db)
+                        .subscript(db, python_version, slice_ty, expr_context),
+                )
             }
 
             (_, Type::EnumComplement(complement)) => {
-                Some(value_ty.subscript(db, complement.remaining_literal_union(db), expr_context))
+                Some(value_ty.subscript(
+                    db,
+                    python_version,
+                    complement.remaining_literal_union(db),
+                    expr_context,
+                ))
             }
 
             (Type::Intersection(intersection), _) => {
                 Some(map_intersection_subscript(db, intersection, |element| {
-                    element.subscript(db, slice_ty, expr_context)
+                    element.subscript(db, python_version, slice_ty, expr_context)
                 }))
             }
 
             (_, Type::Intersection(intersection)) => {
                 Some(map_intersection_subscript(db, intersection, |element| {
-                    value_ty.subscript(db, element, expr_context)
+                    value_ty.subscript(db, python_version, element, expr_context)
                 }))
             }
 
             // Ex) Given `person["name"]`, return `str`
             (Type::TypedDict(typed_dict), _) if expr_context != ast::ExprContext::Store => {
-                Some(typed_dict_subscript(db, typed_dict, slice_ty))
+                Some(typed_dict_subscript(db, python_version, typed_dict, slice_ty))
             }
 
             (
@@ -756,14 +776,24 @@ impl<'db> Type<'db> {
                 if (lhs_literal.is_string() || lhs_literal.is_bytes())
                     && let Some(bool) = rhs_literal.as_bool() =>
             {
-                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context))
+                Some(value_ty.subscript(
+                    db,
+                    python_version,
+                    Type::int_literal(i64::from(bool)),
+                    expr_context,
+                ))
             }
 
             (Type::NominalInstance(nominal), Type::LiteralValue(literal))
                 if let Some(bool) = literal.as_bool()
                     && nominal.tuple_spec(db).is_some() =>
             {
-                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context))
+                Some(value_ty.subscript(
+                    db,
+                    python_version,
+                    Type::int_literal(i64::from(bool)),
+                    expr_context,
+                ))
             }
 
             (Type::KnownInstance(KnownInstanceType::SubscriptedProtocol(_)), _) => {
@@ -849,7 +879,7 @@ impl<'db> Type<'db> {
         // See: https://docs.python.org/3/reference/datamodel.html#class-getitem-versus-getitem
         match value_ty.try_call_dunder(
             db,
-            crate::Program::get(db).python_version(db),
+            python_version,
             "__getitem__",
             CallArguments::positional([slice_ty]),
             TypeContext::default(),
@@ -892,11 +922,14 @@ impl<'db> Type<'db> {
         // even if the target version is Python 3.8 or lower,
         // despite the fact that there will be no corresponding `__class_getitem__`
         // method in these `sys.version_info` branches.
-        if value_ty.is_subtype_of(db, KnownClass::Type.to_instance(db)) {
+        if value_ty.is_subtype_of(
+            db,
+            KnownClass::Type.to_instance_with_version(db, python_version),
+        ) {
             let call_arguments = CallArguments::positional([slice_ty]);
             match value_ty.try_call_dunder_on_class(
                 db,
-                crate::Program::get(db).python_version(db),
+                python_version,
                 "__class_getitem__",
                 &call_arguments,
                 TypeContext::default(),
@@ -932,7 +965,9 @@ impl<'db> Type<'db> {
 
             if let Type::ClassLiteral(class) = value_ty {
                 if class.is_known(db, KnownClass::Type) {
-                    return Ok(KnownClass::GenericAlias.to_instance(db));
+                    return Ok(
+                        KnownClass::GenericAlias.to_instance_with_version(db, python_version)
+                    );
                 }
 
                 if class.generic_context(db).is_some() {

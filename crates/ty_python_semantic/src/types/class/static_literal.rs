@@ -2451,8 +2451,9 @@ impl<'db> StaticClassLiteral<'db> {
         let mut is_attribute_bound = false;
         let mut provenance = Provenance::Unknown;
 
-        let module = parsed_module(db, class_body_scope.python_file(db)).load(db);
-        let index = semantic_index(db, class_body_scope.python_file(db));
+        let python_file = class_body_scope.python_file(db);
+        let module = parsed_module(db, python_file).load(db);
+        let index = semantic_index(db, python_file);
         let class_map = use_def_map(db, class_body_scope);
         let class_table = place_table(db, class_body_scope);
         let is_valid_scope = |method_scope: &Scope| {
@@ -2656,6 +2657,7 @@ impl<'db> StaticClassLiteral<'db> {
                             Some(unpacked.expression_type(for_stmt.target(&module)))
                         }
                         TargetKind::Single => {
+                            let python_version = python_file.python_version(db);
                             // We found an attribute assignment like:
                             //
                             //     for self.name in <iterable>:
@@ -2666,7 +2668,11 @@ impl<'db> StaticClassLiteral<'db> {
                                 TypeContext::default(),
                             );
                             // TODO: Potential diagnostics resulting from the iterable are currently not reported.
-                            Some(iterable_ty.iterate(db).homogeneous_element_type(db))
+                            Some(
+                                iterable_ty
+                                    .iterate(db, python_version)
+                                    .homogeneous_element_type(db),
+                            )
                         }
                     },
                     DefinitionKind::WithItem(with_item) => match with_item.target_kind() {
@@ -2679,6 +2685,7 @@ impl<'db> StaticClassLiteral<'db> {
                             Some(unpacked.expression_type(with_item.target(&module)))
                         }
                         TargetKind::Single => {
+                            let python_version = python_file.python_version(db);
                             // We found an attribute assignment like:
                             //
                             //     with <context_manager> as self.name:
@@ -2689,9 +2696,9 @@ impl<'db> StaticClassLiteral<'db> {
                                 TypeContext::default(),
                             );
                             Some(if with_item.is_async() {
-                                context_ty.aenter(db)
+                                context_ty.aenter(db, python_version)
                             } else {
-                                context_ty.enter(db)
+                                context_ty.enter(db, python_version)
                             })
                         }
                     },
@@ -2706,6 +2713,7 @@ impl<'db> StaticClassLiteral<'db> {
                                 Some(unpacked.expression_type(comprehension.target(&module)))
                             }
                             TargetKind::Single => {
+                                let python_version = python_file.python_version(db);
                                 // We found an attribute assignment like:
                                 //
                                 //     [... for self.name in <iterable>]
@@ -2716,7 +2724,11 @@ impl<'db> StaticClassLiteral<'db> {
                                     TypeContext::default(),
                                 );
                                 // TODO: Potential diagnostics resulting from the iterable are currently not reported.
-                                Some(iterable_ty.iterate(db).homogeneous_element_type(db))
+                                Some(
+                                    iterable_ty
+                                        .iterate(db, python_version)
+                                        .homogeneous_element_type(db),
+                                )
                             }
                         }
                     }

@@ -85,17 +85,20 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                     value_type
                 }
             }
-            UnpackKind::Iterable { mode } => value_type
-                .try_iterate_with_mode(self.db(), mode)
-                .map(|tuple| tuple.homogeneous_element_type(self.db()))
-                .unwrap_or_else(|err| {
-                    err.report_diagnostic(
-                        &self.context,
-                        value_type,
-                        value.as_any_node_ref(self.db(), self.module()),
-                    );
-                    err.fallback_element_type(self.db())
-                }),
+            UnpackKind::Iterable { mode } => {
+                let python_version = self.context.python_version();
+                value_type
+                    .try_iterate_with_mode(self.db(), python_version, mode)
+                    .map(|tuple| tuple.homogeneous_element_type(self.db()))
+                    .unwrap_or_else(|err| {
+                        err.report_diagnostic(
+                            &self.context,
+                            value_type,
+                            value.as_any_node_ref(self.db(), self.module()),
+                        );
+                        err.fallback_element_type(self.db(), python_version)
+                    })
+            }
             UnpackKind::ContextManager { mode } => value_type
                 .try_enter_with_mode(self.db(), self.context.python_version(), mode)
                 .unwrap_or_else(|err| {
@@ -217,11 +220,16 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                     _ => std::slice::from_ref(&value_ty),
                 };
 
+                let python_version = self.context.python_version();
                 for ty in unpack_types.iter().copied() {
-                    let tuple = ty.try_iterate(self.db()).unwrap_or_else(|err| {
-                        err.report_diagnostic(&self.context, ty, value_expr);
-                        Cow::Owned(TupleSpec::homogeneous(err.fallback_element_type(self.db())))
-                    });
+                    let tuple = ty
+                        .try_iterate(self.db(), python_version)
+                        .unwrap_or_else(|err| {
+                            err.report_diagnostic(&self.context, ty, value_expr);
+                            Cow::Owned(TupleSpec::homogeneous(
+                                err.fallback_element_type(self.db(), python_version),
+                            ))
+                        });
 
                     if let Err(err) = unpacker.unpack_tuple(tuple.as_ref()) {
                         unpacker

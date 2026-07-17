@@ -68,7 +68,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             ));
         }
 
-        extract_fixed_length_iterable_element_types(db, bases_node, |expr| {
+        extract_fixed_length_iterable_element_types(db, self.python_version(), bases_node, |expr| {
             self.expression_type(expr)
         })
     }

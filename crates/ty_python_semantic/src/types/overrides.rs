@@ -1532,7 +1532,7 @@ fn check_enum_member_against_constructor_method<'db>(
     let python_version = context.python_version();
     let result = Type::FunctionLiteral(function)
         .bindings(db, python_version)
-        .match_parameters(db, &call_args)
+        .match_parameters(db, python_version, &call_args)
         .check_types(
             db,
             python_version,

@@ -766,9 +766,11 @@ pub fn call_signature_details<'db>(
                     .inferred_type(model)
                     .unwrap_or(Type::unknown())
             });
-        let mut bindings = callable_type
-            .bindings(db, python_version)
-            .match_parameters(db, &call_arguments);
+        let mut bindings = callable_type.bindings(db, python_version).match_parameters(
+            db,
+            python_version,
+            &call_arguments,
+        );
 
         // Run type checking to resolve TypeVar bindings from argument types.
         // For example, calling `dict[str, int].get("a")` resolves the `_KT`
@@ -816,7 +818,7 @@ fn resolve_single_overload<'db>(
 
     let constraints = ConstraintSetBuilder::new();
     let mut resolved: Vec<_> = bindings
-        .match_parameters(db, &args)
+        .match_parameters(db, python_version, &args)
         .check_types(
             db,
             python_version,
@@ -871,7 +873,7 @@ fn full_type_bindings_for_call<'db>(
 
     func_type
         .bindings(db, python_version)
-        .match_parameters(db, &call_arguments)
+        .match_parameters(db, python_version, &call_arguments)
         .check_types(
             db,
             python_version,
@@ -1040,7 +1042,14 @@ pub fn definitions_for_bin_op<'db>(
     let left_ty = binary_op.left.inferred_type(model)?;
     let right_ty = binary_op.right.inferred_type(model)?;
 
-    let Ok(bindings) = Type::try_call_bin_op(model.db(), left_ty, binary_op.op, right_ty) else {
+    let db = model.db();
+    let Ok(bindings) = Type::try_call_bin_op(
+        db,
+        model.python_file().python_version(db),
+        left_ty,
+        binary_op.op,
+        right_ty,
+    ) else {
         return None;
     };
 
@@ -1204,7 +1213,7 @@ pub fn resolved_call_signature<'db>(
     let constraints = ConstraintSetBuilder::new();
     let bindings = callable_type
         .bindings(db, python_version)
-        .match_parameters(db, &args)
+        .match_parameters(db, python_version, &args)
         .check_types(
             db,
             python_version,

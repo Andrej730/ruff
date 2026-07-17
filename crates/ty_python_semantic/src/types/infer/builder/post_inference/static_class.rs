@@ -1341,7 +1341,10 @@ fn check_final_class_abstract_methods<'db>(
             if let Some(callables) = function_type_as_callable
                 && Type::function_like_callable(
                     db,
-                    Signature::new(Parameters::gradual_form(), Type::none(db)),
+                    Signature::new(
+                        Parameters::gradual_form(),
+                        Type::none_with_version(db, context.python_version()),
+                    ),
                 )
                 .is_assignable_to(db, callables.into_type(db))
             {

@@ -2544,16 +2544,19 @@ impl<'db> PatternSuccessAnalyzer<'db> {
             return None;
         }
 
-        let tuple = subject_ty.try_iterate(self.db).unwrap_or_else(|error| {
-            let fallback_element_ty = error.fallback_element_type(self.db);
-            Cow::Owned(TupleSpec::homogeneous(
-                if fallback_element_ty.is_unknown() {
-                    Type::object()
-                } else {
-                    fallback_element_ty
-                },
-            ))
-        });
+        let python_version = self.python_file.python_version(self.db);
+        let tuple = subject_ty
+            .try_iterate(self.db, python_version)
+            .unwrap_or_else(|error| {
+                let fallback_element_ty = error.fallback_element_type(self.db, python_version);
+                Cow::Owned(TupleSpec::homogeneous(
+                    if fallback_element_ty.is_unknown() {
+                        Type::object()
+                    } else {
+                        fallback_element_ty
+                    },
+                ))
+            });
         let mut unpacker = TupleUnpacker::new(self.db, target_len);
         unpacker.unpack_tuple(tuple.as_ref()).ok()?;
         Some((narrowed_subject_ty, unpacker.into_types().collect()))
@@ -3038,7 +3041,9 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             return (narrowed != lhs_ty).then_some(narrowed);
         }
         let membership_type = elements_of(self.db, rhs_ty)?;
-        let iterable = membership_type.try_iterate(self.db).ok()?;
+        let iterable = membership_type
+            .try_iterate(self.db, self.python_file.python_version(self.db))
+            .ok()?;
 
         if iterable
             .as_fixed_length()
@@ -3130,7 +3135,9 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             return narrow_string_membership(self.db, lhs_ty, haystack.value(self.db), false);
         }
         let membership_type = elements_of(self.db, rhs_ty)?;
-        let iterable = membership_type.try_iterate(self.db).ok()?;
+        let iterable = membership_type
+            .try_iterate(self.db, self.python_file.python_version(self.db))
+            .ok()?;
         let fixed_length = iterable.as_fixed_length()?;
         let mut builder = IntersectionBuilder::new(self.db);
         let mut constrained = false;

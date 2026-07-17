@@ -183,7 +183,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
             }
 
-            ast::Expr::NoneLiteral(_literal) => Type::none(self.db()),
+            ast::Expr::NoneLiteral(_literal) => {
+                Type::none_with_version(self.db(), self.python_version())
+            }
 
             // https://typing.python.org/en/latest/spec/annotations.html#string-annotations
             ast::Expr::StringLiteral(string) => self.infer_string_type_expression(string),
@@ -260,6 +262,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
                             let dunder_fails = Type::try_call_bin_op(
                                 self.db(),
+                                self.python_version(),
                                 left_type_value,
                                 ast::Operator::BitOr,
                                 right_type_value,
@@ -392,6 +395,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 .infer_expression(&binary.right, TypeContext::default());
                             if Type::try_call_bin_op(
                                 self.db(),
+                                self.python_version(),
                                 left_value,
                                 ast::Operator::BitAnd,
                                 right_value,
@@ -1883,8 +1887,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 ));
             }
         }
-        let ty = class.to_specialized_instance(
+        let ty = class.to_specialized_instance_with_version(
             self.db(),
+            self.python_version(),
             args.iter()
                 .map(|node| self.infer_type_expression(node))
                 .collect::<Vec<_>>(),
@@ -2041,7 +2046,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             },
             SpecialFormType::Optional => {
                 let param_type = self.infer_type_expression(arguments_slice);
-                UnionType::from_elements_leave_aliases(db, [param_type, Type::none(db)])
+                UnionType::from_elements_leave_aliases(
+                    db,
+                    [
+                        param_type,
+                        Type::none_with_version(db, self.python_version()),
+                    ],
+                )
             }
             SpecialFormType::Union => {
                 // TODO: Support the union of a `TypeVarTuple`'s elements. Until then, reject
