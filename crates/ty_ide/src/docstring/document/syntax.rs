@@ -63,55 +63,12 @@ pub(in crate::docstring) fn starts_with_markdown_list_item(line: &str) -> bool {
 /// For example, this returns `true` for ``"`value`"`` and `false` for
 /// ``"`value` trailing"``.
 pub(in crate::docstring) fn is_markdown_code_span(text: &str) -> bool {
-    find_backtick_run(text, TextSize::ZERO).and_then(|opening| markdown_code_span(text, opening))
-        == Some(TextRange::up_to(TextSize::of(text)))
-}
-
-/// Returns the byte range of the first consecutive backtick run at or after `from`.
-///
-/// For example, searching ``"value `code`"`` from the start returns the range covering the
-/// opening ``"`"``.
-pub(in crate::docstring) fn find_backtick_run(text: &str, from: TextSize) -> Option<TextRange> {
-    let from = from.to_usize();
-    let start = from + text.get(from..)?.find('`')?;
-    let len = text[start..]
-        .bytes()
-        .take_while(|byte| *byte == b'`')
-        .count();
-    Some(TextRange::new(
-        TextSize::of(&text[..start]),
-        TextSize::of(&text[..start + len]),
-    ))
-}
-
-/// Returns the Markdown code span delimited by `opening`, if it has a matching closing run.
-///
-/// For example, the opening run in "``value`with:ticks`` trailing" produces the range covering
-/// "``value`with:ticks``".
-pub(in crate::docstring) fn markdown_code_span(
-    text: &str,
-    opening: TextRange,
-) -> Option<TextRange> {
-    let mut search_from = opening.end();
-    loop {
-        let closing = find_backtick_run(text, search_from)?;
-        if closing.len() == opening.len() {
-            return Some(opening.cover(closing));
-        }
-        search_from = closing.end();
-    }
-}
-
-/// Returns whether the backtick run at `index` is escaped by a preceding backslash.
-///
-/// For example, the backtick in ``"\`"`` is escaped, while the backtick in ``"\\`"`` is not.
-pub(in crate::docstring) fn is_backtick_run_escaped(text: &str, index: usize) -> bool {
-    !text[..index]
-        .bytes()
-        .rev()
-        .take_while(|byte| *byte == b'\\')
-        .count()
-        .is_multiple_of(2)
+    let mut fragments = BacktickFragments::new(text);
+    matches!(
+        fragments.next(),
+        Some(BacktickFragment::Span(span))
+            if span.range() == TextRange::up_to(TextSize::of(text))
+    ) && fragments.next().is_none()
 }
 
 /// Losslessly partitions source text around complete, unescaped backtick spans.
@@ -513,31 +470,45 @@ pub(super) fn split_trailing_parenthetical(value: &str) -> Option<(&str, &str)> 
     let mut outermost_opening = None;
     let mut cursor = Cursor::new(value);
 
-    while let Some(character) = cursor.bump() {
-        let index = cursor.offset().to_usize() - character.len_utf8();
-        match character {
-            '\'' | '"' => consume_quoted_string(&mut cursor, character),
-            '`' if !is_backtick_run_escaped(value, index) => {
-                let opening = find_backtick_run(value, TextSize::of(&value[..index]))?;
-                let span = markdown_code_span(value, opening).unwrap_or(opening);
-                cursor.skip_bytes((span.end() - cursor.offset()).to_usize());
+    while !cursor.is_eof() {
+        let start = cursor.offset();
+        match cursor.first() {
+            quote @ ('\'' | '"') => {
+                let _ = cursor.bump();
+                consume_quoted_string(&mut cursor, quote);
+            }
+            '`' => {
+                let mut runs = BacktickRuns::starts_at(cursor.offset(), value);
+                let opening = runs.next()?;
+                if opening.is_escaped() {
+                    // The backslash escapes only the first backtick. Leave the rest of the run
+                    // for the next iteration, where it may open a shorter span.
+                    let _ = cursor.bump();
+                } else {
+                    let _ = runs.eat_span(opening);
+                    cursor = runs.into_cursor();
+                }
             }
             '(' => {
+                let _ = cursor.bump();
                 if depth == 0 {
-                    outermost_opening = Some(index);
+                    outermost_opening = Some(start);
                 }
                 depth += 1;
             }
             ')' => {
+                let _ = cursor.bump();
                 depth = depth.checked_sub(1)?;
                 if depth == 0 && cursor.is_eof() {
                     let opening = outermost_opening?;
-                    let prefix = value[..opening].trim();
-                    let contents = value[opening + '('.len_utf8()..index].trim();
+                    let prefix = value[TextRange::up_to(opening)].trim();
+                    let contents = value[TextRange::new(opening + TextSize::new(1), start)].trim();
                     return Some((prefix, contents));
                 }
             }
-            _ => {}
+            _ => {
+                let _ = cursor.bump();
+            }
         }
     }
 
@@ -688,6 +659,22 @@ mod tests {
         assert_eq!(
             split_trailing_parenthetical("value (`(`)"),
             Some(("value", "`(`"))
+        );
+    }
+
+    #[test]
+    fn ignores_parentheses_inside_code_spans_after_escaped_backtick() {
+        assert_eq!(
+            split_trailing_parenthetical(r"value (\``)`)"),
+            Some(("value", r"\``)`"))
+        );
+    }
+
+    #[test]
+    fn treats_unmatched_backticks_as_plain_parenthetical_text() {
+        assert_eq!(
+            split_trailing_parenthetical("value (`unfinished)"),
+            Some(("value", "`unfinished"))
         );
     }
 
