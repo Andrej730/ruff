@@ -10,6 +10,7 @@ use crate::place::{DefinedPlace, Definedness, Place};
 use crate::types::call::CallErrorKind;
 use crate::types::call::bind::CallableDescription;
 use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     CALL_NON_CALLABLE, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_KEY,
     INVALID_TYPE_ARGUMENTS, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE, POSSIBLY_MISSING_IMPLICIT_CALL,
@@ -67,14 +68,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             CycleDetector<TypedDictKeyExpectedType, Type<'db>, Option<Type<'db>>, 3>;
 
         fn imp<'db>(
-            db: &'db dyn Db,
+            context: &InferContext<'db, '_>,
             ty: Type<'db>,
             visitor: &TypedDictKeyExpectedTypeVisitor<'db>,
         ) -> Option<Type<'db>> {
+            let db = context.db();
             match ty {
                 Type::TypedDict(typed_dict) => {
                     if typed_dict.explicit_extra_items(db).is_some() {
-                        return Some(KnownClass::Str.to_instance(db));
+                        return Some(
+                            KnownClass::Str.to_instance_with_version(db, context.python_version()),
+                        );
                     }
                     let keys = typed_dict
                         .items(db)
@@ -87,7 +91,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let keys = union
                         .elements(db)
                         .iter()
-                        .filter_map(|element| imp(db, *element, visitor))
+                        .filter_map(|element| imp(context, *element, visitor))
                         .collect_vec();
                     (!keys.is_empty()).then(|| UnionType::from_elements(db, keys))
                 }
@@ -95,18 +99,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let keys = intersection
                         .positive(db)
                         .iter()
-                        .filter_map(|element| imp(db, *element, visitor))
+                        .filter_map(|element| imp(context, *element, visitor))
                         .collect_vec();
                     (!keys.is_empty()).then(|| UnionType::from_elements(db, keys))
                 }
                 Type::TypeAlias(alias) => {
-                    visitor.visit(ty, || imp(db, alias.value_type(db), visitor))
+                    visitor.visit(ty, || imp(context, alias.value_type(db), visitor))
                 }
                 _ => None,
             }
         }
 
-        imp(self.db(), ty, &TypedDictKeyExpectedTypeVisitor::default())
+        imp(
+            &self.context,
+            ty,
+            &TypedDictKeyExpectedTypeVisitor::default(),
+        )
     }
 
     fn store_typed_dict_key_expected_type(&mut self, slice: &ast::Expr, value_ty: Type<'db>) {
@@ -427,7 +435,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         .collect();
 
                     return class
-                        .to_specialized_class_type(db, arg_types)
+                        .to_specialized_class_type_with_version(
+                            db,
+                            self.python_version(),
+                            arg_types,
+                        )
                         .map(Type::from)
                         .unwrap_or_else(Type::unknown);
                 }
@@ -1478,8 +1490,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ty_upper = self.infer_optional_expression(upper.as_deref(), TypeContext::default());
         let ty_step = self.infer_optional_expression(step.as_deref(), TypeContext::default());
 
-        KnownClass::Slice.to_specialized_instance(
+        KnownClass::Slice.to_specialized_instance_with_version(
             db,
+            self.python_version(),
             &[
                 ty_lower.unwrap_or_else(|| Type::none(db)),
                 ty_upper.unwrap_or_else(|| Type::none(db)),
@@ -1716,8 +1729,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         return true;
                     }
 
-                    if slice_ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
-                        && let Some(expected_ty) = typed_dict.arbitrary_key_mutation_type(db)
+                    if slice_ty.is_assignable_to(
+                        db,
+                        KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                    ) && let Some(expected_ty) = typed_dict.arbitrary_key_mutation_type(db)
                     {
                         let rhs_value_ty =
                             infer_rhs_value(self, TypeContext::new(Some(expected_ty)));
@@ -2089,9 +2104,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         && string_literal_values(db, slice_ty).is_some_and(|mut literals| {
                             literals.all(|literal| !typed_dict.items(db).contains_key(literal))
                         });
-                    let can_delete_arbitrary_key = slice_ty
-                        .is_assignable_to(db, KnownClass::Str.to_instance(db))
-                        && typed_dict.supports_arbitrary_key_deletion(db);
+                    let can_delete_arbitrary_key = slice_ty.is_assignable_to(
+                        db,
+                        KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                    ) && typed_dict
+                        .supports_arbitrary_key_deletion(db);
                     if can_delete_extra_literals || can_delete_arbitrary_key {
                         return;
                     }

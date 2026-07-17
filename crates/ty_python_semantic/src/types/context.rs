@@ -8,6 +8,7 @@ use ruff_db::{
     diagnostic::{Annotation, Diagnostic, DiagnosticId, IntoDiagnosticMessage, Severity, Span},
     files::File,
 };
+use ruff_python_ast::PythonVersion;
 use ruff_text_size::{Ranged, TextRange};
 
 use super::{Type, TypeCheckDiagnostics, infer_definition_types};
@@ -84,6 +85,10 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
 
     pub(crate) fn python_file(&self) -> PythonFile<'db> {
         self.python_file
+    }
+
+    pub(crate) fn python_version(&self) -> PythonVersion {
+        self.python_file.python_version(self.db)
     }
 
     /// The module for which the types are inferred.

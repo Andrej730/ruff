@@ -325,7 +325,11 @@ fn enum_class_literal<'db>(
         .collect();
     aliases.sort_unstable();
     let members_are_exhaustive = !metadata.value_construction.metaclass_may_transform_values
-        && !Type::ClassLiteral(class).is_subtype_of(db, KnownClass::Flag.to_subclass_of(db))
+        && !Type::ClassLiteral(class).is_subtype_of(
+            db,
+            KnownClass::Flag
+                .to_subclass_of_with_version(db, class.python_file(db).python_version(db)),
+        )
         && !enum_has_custom_missing(db, class);
 
     Some(EnumClassLiteral::new(
@@ -812,8 +816,11 @@ impl<'db> EnumComplementType<'db> {
     /// attribute type from each remaining canonical enum member.
     pub(crate) fn member_type(self, db: &'db dyn Db, member_name: &str) -> Option<Type<'db>> {
         let enum_class_literal = self.enum_class_literal(db);
-        let is_enum_subclass = Type::ClassLiteral(self.enum_class(db))
-            .is_subtype_of(db, KnownClass::Enum.to_subclass_of(db));
+        let python_version = self.enum_class(db).python_file(db).python_version(db);
+        let is_enum_subclass = Type::ClassLiteral(self.enum_class(db)).is_subtype_of(
+            db,
+            KnownClass::Enum.to_subclass_of_with_version(db, python_version),
+        );
         let mut builder = UnionBuilder::new(db);
         let mut found_member = false;
 
@@ -980,7 +987,6 @@ pub(crate) fn enum_metadata<'db>(
             });
         }
     };
-
     // This is a fast path to avoid traversing the MRO of known classes
     if class
         .known(db)
@@ -992,6 +998,8 @@ pub(crate) fn enum_metadata<'db>(
     if !is_enum_class_by_inheritance(db, class) {
         return None;
     }
+
+    let python_version = class.python_file(db).python_version(db);
 
     let scope_id = class.body_scope(db);
     let use_def_map = use_def_map(db, scope_id);
@@ -1094,7 +1102,11 @@ pub(crate) fn enum_metadata<'db>(
                                 // `StrEnum`s have different `auto()` behaviour to enums inheriting from `(str, Enum)`
                                 let auto_value_ty =
                                     if Type::ClassLiteral(ClassLiteral::Static(class))
-                                        .is_subtype_of(db, KnownClass::StrEnum.to_subclass_of(db))
+                                        .is_subtype_of(
+                                            db,
+                                            KnownClass::StrEnum
+                                                .to_subclass_of_with_version(db, python_version),
+                                        )
                                     {
                                         Type::string_literal(db, &*name.to_lowercase())
                                     } else {
@@ -1106,7 +1118,11 @@ pub(crate) fn enum_metadata<'db>(
                                                 .filter(|class| {
                                                     !Type::from(*class).is_subtype_of(
                                                         db,
-                                                        KnownClass::Enum.to_subclass_of(db),
+                                                        KnownClass::Enum
+                                                            .to_subclass_of_with_version(
+                                                                db,
+                                                                python_version,
+                                                            ),
                                                     )
                                                 })
                                                 .map(|class| class.known(db))
@@ -1125,7 +1141,8 @@ pub(crate) fn enum_metadata<'db>(
                                             [] | [Some(KnownClass::Int)]
                                         ) {
                                             if prev_value_was_non_literal_int {
-                                                KnownClass::Int.to_instance(db)
+                                                KnownClass::Int
+                                                    .to_instance_with_version(db, python_version)
                                             } else if let Some(prev_bool_literal) =
                                                 prev_bool_literal
                                             {
@@ -1194,7 +1211,10 @@ pub(crate) fn enum_metadata<'db>(
             // Track whether this member's value is a non-literal `int`, so a
             // following `auto()` knows to widen its result to `int`.
             prev_value_was_non_literal_int = value_ty.as_int_like_literal().is_none()
-                && value_ty.is_assignable_to(db, KnownClass::Int.to_instance(db));
+                && value_ty.is_assignable_to(
+                    db,
+                    KnownClass::Int.to_instance_with_version(db, python_version),
+                );
             prev_bool_literal =
                 value_ty
                     .as_literal_value_kind()
@@ -1537,11 +1557,14 @@ pub(crate) fn is_enum_class_by_inheritance<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
 ) -> bool {
-    Type::ClassLiteral(ClassLiteral::Static(class))
-        .is_subtype_of(db, KnownClass::Enum.to_subclass_of(db))
-        || class
-            .metaclass(db)
-            .is_subtype_of(db, KnownClass::EnumType.to_subclass_of(db))
+    let python_version = class.python_file(db).python_version(db);
+    Type::ClassLiteral(ClassLiteral::Static(class)).is_subtype_of(
+        db,
+        KnownClass::Enum.to_subclass_of_with_version(db, python_version),
+    ) || class.metaclass(db).is_subtype_of(
+        db,
+        KnownClass::EnumType.to_subclass_of_with_version(db, python_version),
+    )
 }
 
 /// Extracts the inner value type from an `enum.nonmember()` wrapper.

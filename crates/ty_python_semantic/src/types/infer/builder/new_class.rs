@@ -74,7 +74,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             literal.value(db)
         } else {
             if let Some(name_node) = name_node
-                && !name_type.is_assignable_to(db, KnownClass::Str.to_instance(db))
+                && !name_type.is_assignable_to(
+                    db,
+                    KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                )
                 && let Some(builder) = self.context.report_lint(&INVALID_ARGUMENT_TYPE, name_node)
             {
                 let mut diagnostic = builder.into_diagnostic(
@@ -257,7 +260,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     ) {
         let db = self.db();
         let callable_type = self.expression_type(call_expr.func.as_ref());
-        let iterable_object = KnownClass::Iterable.to_specialized_instance(db, &[Type::object()]);
+        let iterable_object = KnownClass::Iterable.to_specialized_instance_with_version(
+            db,
+            self.python_version(),
+            &[Type::object()],
+        );
         let mut call_arguments = self.prepare_call_arguments(&call_expr.arguments);
 
         let mut bindings = callable_type
@@ -269,7 +276,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             &mut |builder, (_, expr, tcx)| {
                 if name_node.is_some_and(|name| std::ptr::eq(expr, name)) {
                     let _ = builder.infer_expression(expr, tcx);
-                    KnownClass::Str.to_instance(builder.db())
+                    KnownClass::Str.to_instance_with_version(builder.db(), builder.python_version())
                 } else if bases_arg.is_some_and(|bases| std::ptr::eq(expr, bases)) {
                     if definition.is_none() {
                         let _ = builder.infer_expression(expr, tcx);

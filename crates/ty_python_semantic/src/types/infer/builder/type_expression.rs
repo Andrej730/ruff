@@ -277,7 +277,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                     (Type::ClassLiteral(class), Type::LiteralValue(literal))
                                     | (Type::LiteralValue(literal), Type::ClassLiteral(class))
                                         if class.metaclass(self.db())
-                                            == KnownClass::Type.to_class_literal(self.db()) =>
+                                            == KnownClass::Type.to_class_literal_with_version(
+                                                self.db(),
+                                                self.python_version(),
+                                            ) =>
                                     {
                                         Some(literal)
                                     }
@@ -535,8 +538,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let inner_type = speculative_builder.infer_type_expression(single_element);
 
                     if inner_type.is_hintable(self.db()) {
-                        let hinted_type =
-                            KnownClass::List.to_specialized_instance(db, &[inner_type]);
+                        let hinted_type = KnownClass::List.to_specialized_instance_with_version(
+                            db,
+                            self.python_version(),
+                            &[inner_type],
+                        );
 
                         diagnostic.set_primary_message(format_args!(
                             "Did you mean `{}`?",
@@ -713,8 +719,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let key_type = speculative.infer_type_expression(key);
                     let value_type = speculative.infer_type_expression(value);
                     if key_type.is_hintable(self.db()) && value_type.is_hintable(self.db()) {
-                        let hinted_type = KnownClass::Dict
-                            .to_specialized_instance(self.db(), &[key_type, value_type]);
+                        let hinted_type = KnownClass::Dict.to_specialized_instance_with_version(
+                            self.db(),
+                            self.python_version(),
+                            &[key_type, value_type],
+                        );
                         diagnostic.set_primary_message(format_args!(
                             "Did you mean `{}`?",
                             hinted_type.display(self.db()),
@@ -740,8 +749,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let inner_type = speculative_builder.infer_type_expression(single_element);
 
                     if inner_type.is_hintable(self.db()) {
-                        let hinted_type =
-                            KnownClass::Set.to_specialized_instance(self.db(), &[inner_type]);
+                        let hinted_type = KnownClass::Set.to_specialized_instance_with_version(
+                            self.db(),
+                            self.python_version(),
+                            &[inner_type],
+                        );
 
                         diagnostic.set_primary_message(format_args!(
                             "Did you mean `{}`?",
@@ -1281,7 +1293,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
             ast::Expr::NoneLiteral(_) => {
                 self.infer_expression(slice, TypeContext::default());
-                KnownClass::NoneType.to_subclass_of(self.db())
+                KnownClass::NoneType.to_subclass_of_with_version(self.db(), self.python_version())
             }
             ast::Expr::Subscript(
                 subscript @ ast::ExprSubscript {

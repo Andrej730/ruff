@@ -38,7 +38,7 @@ use ty_python_core::{
     scope::NodeWithScopeRef,
 };
 
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 use ruff_text_size::Ranged;
 
 fn parameters_have_annotations(parameters: &ast::Parameters) -> bool {
@@ -68,25 +68,34 @@ impl<'db> ExpectedReturnType<'db> {
     /// Creates the expected return type policy for `function_node`.
     fn from_function(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         function: FunctionType<'db>,
         function_node: &ast::StmtFunctionDef,
     ) -> Self {
         /// Normalizes special return annotations to the type actually returned by expressions.
-        fn normalize<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+        fn normalize<'db>(
+            db: &'db dyn Db,
+            python_version: PythonVersion,
+            ty: Type<'db>,
+        ) -> Type<'db> {
             match ty {
-                Type::TypeIs(_) | Type::TypeGuard(_) => KnownClass::Bool.to_instance(db),
+                Type::TypeIs(_) | Type::TypeGuard(_) => {
+                    KnownClass::Bool.to_instance_with_version(db, python_version)
+                }
                 ty => ty,
             }
         }
 
         let public = normalize(
             db,
+            python_version,
             same_module_uncached_raw_signature(db, function, ReturnCallableTypeVarScope::Public)
                 .return_ty,
         );
         let lexical = function_node.type_params.is_some().then(|| {
             normalize(
                 db,
+                python_version,
                 same_module_uncached_raw_signature(
                     db,
                     function,
@@ -145,8 +154,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         if let Some(returns) = function.returns.as_deref() {
             let has_empty_body = self.return_types_and_ranges.is_empty()
-                && function_body_kind(db, function, |expr| self.expression_type(expr))
-                    == FunctionBodyKind::Stub;
+                && function_body_kind(db, self.python_file(), function, |expr| {
+                    self.expression_type(expr)
+                }) == FunctionBodyKind::Stub;
 
             let mut enclosing_class_context = None;
 
@@ -176,8 +186,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ReturnCallableTypeVarScope::Public,
             )
             .return_ty;
-            let expected_return =
-                ExpectedReturnType::from_function(db, enclosing_function, function);
+            let expected_return = ExpectedReturnType::from_function(
+                db,
+                self.python_version(),
+                enclosing_function,
+                function,
+            );
             let expected_ty = expected_return.public();
 
             let scope_id = self.index.node_scope(NodeWithScopeRef::Function(function));
@@ -197,7 +211,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 };
 
                 if !inferred_return
-                    .to_instance_unknown(db)
+                    .to_instance_unknown_with_version(db, self.python_version())
                     .is_assignable_to(db, expected_ty)
                 {
                     report_invalid_generator_function_return_type(
@@ -1057,9 +1071,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             diag.set_primary_message(format_args!("Did you mean `{name}.kwargs`?"));
                             add_type_expression_reference_link(diag);
                         }
-                        KnownClass::Dict.to_specialized_instance(
+                        KnownClass::Dict.to_specialized_instance_with_version(
                             db,
-                            &[KnownClass::Str.to_instance(db), Type::unknown()],
+                            self.python_version(),
+                            &[
+                                KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                                Type::unknown(),
+                            ],
                         )
                     }
 
@@ -1069,9 +1087,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // `**kwargs: P`
                     None => {
                         // The diagnostic for this case is handled in `in_type_expression`.
-                        KnownClass::Dict.to_specialized_instance(
+                        KnownClass::Dict.to_specialized_instance_with_version(
                             db,
-                            &[KnownClass::Str.to_instance(db), Type::unknown()],
+                            self.python_version(),
+                            &[
+                                KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                                Type::unknown(),
+                            ],
                         )
                     }
                 }
@@ -1084,8 +1106,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             {
                 annotated_type
             } else {
-                KnownClass::Dict
-                    .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), annotated_type])
+                KnownClass::Dict.to_specialized_instance_with_version(
+                    db,
+                    self.python_version(),
+                    &[
+                        KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                        annotated_type,
+                    ],
+                )
             };
             self.add_declaration_with_binding(
                 parameter.into(),
@@ -1093,8 +1121,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 &DeclaredAndInferredType::are_the_same_type(ty),
             );
         } else {
-            let inferred_ty = KnownClass::Dict
-                .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), Type::unknown()]);
+            let inferred_ty = KnownClass::Dict.to_specialized_instance_with_version(
+                db,
+                self.python_version(),
+                &[
+                    KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                    Type::unknown(),
+                ],
+            );
 
             self.add_binding(parameter.into(), definition)
                 .insert(self, inferred_ty);
@@ -1158,9 +1192,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         parameter: &'ast ast::Parameter,
         definition: Definition<'db>,
     ) {
-        let inferred_ty = KnownClass::Dict.to_specialized_instance(
+        let inferred_ty = KnownClass::Dict.to_specialized_instance_with_version(
             self.db(),
-            &[KnownClass::Str.to_instance(self.db()), Type::unknown()],
+            self.python_version(),
+            &[
+                KnownClass::Str.to_instance_with_version(self.db(), self.python_version()),
+                Type::unknown(),
+            ],
         );
 
         self.add_binding(parameter.into(), definition)

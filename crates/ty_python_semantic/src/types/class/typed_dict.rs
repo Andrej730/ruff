@@ -40,28 +40,69 @@ pub(super) fn synthesize_typed_dict_method<'db>(
     let instance_ty = Type::TypedDict(typed_dict);
     match method_name {
         "__init__" => Some(synthesize_typed_dict_init(db, typed_dict, fields())),
-        "__getitem__" => Some(synthesize_typed_dict_getitem(db, typed_dict, fields())),
-        "__setitem__" => Some(synthesize_typed_dict_setitem(db, typed_dict, fields())),
-        "__delitem__" => Some(synthesize_typed_dict_delitem(db, typed_dict, fields())),
-        "get" => Some(synthesize_typed_dict_get(db, typed_dict, fields())),
-        "update" => Some(synthesize_typed_dict_update(db, typed_dict, fields())),
-        "pop" => Some(synthesize_typed_dict_pop(db, typed_dict, fields())),
-        "setdefault" => Some(synthesize_typed_dict_setdefault(db, typed_dict, fields())),
+        "__getitem__" => Some(synthesize_typed_dict_getitem(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "__setitem__" => Some(synthesize_typed_dict_setitem(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "__delitem__" => Some(synthesize_typed_dict_delitem(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "get" => Some(synthesize_typed_dict_get(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "update" => Some(synthesize_typed_dict_update(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "pop" => Some(synthesize_typed_dict_pop(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
+        "setdefault" => Some(synthesize_typed_dict_setdefault(
+            db,
+            python_version,
+            typed_dict,
+            fields(),
+        )),
         "clear" if typed_dict.supports_arbitrary_key_deletion(db) => Some(
             synthesize_typed_dict_no_argument_method(db, typed_dict, Type::none(db)),
         ),
         "popitem" if typed_dict.supports_arbitrary_key_deletion(db) => {
             let return_ty = Type::heterogeneous_tuple(
                 db,
-                [KnownClass::Str.to_instance(db), typed_dict.value_type(db)],
+                [
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                    typed_dict.value_type(db),
+                ],
             );
             Some(synthesize_typed_dict_no_argument_method(
                 db, typed_dict, return_ty,
             ))
         }
         "__iter__" if typed_dict.openness(db).is_closed() => {
-            let return_ty =
-                KnownClass::Iterator.to_specialized_instance(db, &[typed_dict.key_type(db)]);
+            let return_ty = KnownClass::Iterator.to_specialized_instance_with_version(
+                db,
+                python_version,
+                &[typed_dict.key_type(db)],
+            );
             Some(synthesize_typed_dict_no_argument_method(
                 db, typed_dict, return_ty,
             ))
@@ -75,9 +116,12 @@ pub(super) fn synthesize_typed_dict_method<'db>(
         "values" if !typed_dict.openness(db).is_implicitly_open() => Some(
             synthesize_typed_dict_view_method(db, python_version, typed_dict, "dict_values"),
         ),
-        "__or__" | "__ror__" | "__ior__" => {
-            Some(synthesize_typed_dict_merge(db, instance_ty, method_name))
-        }
+        "__or__" | "__ror__" | "__ior__" => Some(synthesize_typed_dict_merge(
+            db,
+            python_version,
+            instance_ty,
+            method_name,
+        )),
         _ => None,
     }
 }
@@ -200,6 +244,7 @@ fn synthesize_typed_dict_init<'db>(
 /// Synthesize the `__getitem__` method for a `TypedDict`.
 fn synthesize_typed_dict_getitem<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -220,8 +265,9 @@ fn synthesize_typed_dict_getitem<'db>(
             Parameters::standard([
                 Parameter::positional_only(Some(Name::new_static("self")))
                     .with_annotated_type(instance_ty),
-                Parameter::positional_only(Some(Name::new_static("key")))
-                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                Parameter::positional_only(Some(Name::new_static("key"))).with_annotated_type(
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                ),
             ]),
             if typed_dict.explicit_extra_items(db).is_some() {
                 typed_dict.value_type(db)
@@ -241,6 +287,7 @@ fn synthesize_typed_dict_getitem<'db>(
 /// Synthesize the `__setitem__` method for a `TypedDict`.
 fn synthesize_typed_dict_setitem<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -281,8 +328,9 @@ fn synthesize_typed_dict_setitem<'db>(
             let parameters = [
                 Parameter::positional_only(Some(Name::new_static("self")))
                     .with_annotated_type(instance_ty),
-                Parameter::positional_only(Some(Name::new_static("key")))
-                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                Parameter::positional_only(Some(Name::new_static("key"))).with_annotated_type(
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                ),
                 Parameter::positional_only(Some(Name::new_static("value")))
                     .with_annotated_type(value_ty),
             ];
@@ -300,6 +348,7 @@ fn synthesize_typed_dict_setitem<'db>(
 /// Synthesize the `__delitem__` method for a `TypedDict`.
 fn synthesize_typed_dict_delitem<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -336,8 +385,9 @@ fn synthesize_typed_dict_delitem<'db>(
             let parameters = [
                 Parameter::positional_only(Some(Name::new_static("self")))
                     .with_annotated_type(instance_ty),
-                Parameter::positional_only(Some(Name::new_static("key")))
-                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                Parameter::positional_only(Some(Name::new_static("key"))).with_annotated_type(
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                ),
             ];
             Signature::new(Parameters::standard(parameters), Type::none(db))
         }));
@@ -353,6 +403,7 @@ fn synthesize_typed_dict_delitem<'db>(
 /// Synthesize the `get` method for a `TypedDict`.
 fn synthesize_typed_dict_get<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -434,8 +485,9 @@ fn synthesize_typed_dict_get<'db>(
             Parameters::standard([
                 Parameter::positional_only(Some(Name::new_static("self")))
                     .with_annotated_type(instance_ty),
-                Parameter::positional_only(Some(Name::new_static("key")))
-                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                Parameter::positional_only(Some(Name::new_static("key"))).with_annotated_type(
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                ),
             ]),
             UnionType::from_two_elements(db, fallback_value_ty, Type::none(db)),
         )))
@@ -449,8 +501,9 @@ fn synthesize_typed_dict_get<'db>(
             let parameters = [
                 Parameter::positional_only(Some(Name::new_static("self")))
                     .with_annotated_type(instance_ty),
-                Parameter::positional_only(Some(Name::new_static("key")))
-                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                Parameter::positional_only(Some(Name::new_static("key"))).with_annotated_type(
+                    KnownClass::Str.to_instance_with_version(db, python_version),
+                ),
                 Parameter::positional_only(Some(Name::new_static("default")))
                     .with_annotated_type(Type::TypeVar(t_default)),
             ];
@@ -473,6 +526,7 @@ fn synthesize_typed_dict_get<'db>(
 /// Synthesize the `update` method for a `TypedDict`.
 fn synthesize_typed_dict_update<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -503,12 +557,24 @@ fn synthesize_typed_dict_update<'db>(
     let update_patch_ty = Type::TypedDict(typed_dict.to_update_patch(db));
 
     let mapping_ty = typed_dict.dict_value_type(db).map(|value_ty| {
-        KnownClass::Mapping
-            .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), value_ty])
+        KnownClass::Mapping.to_specialized_instance_with_version(
+            db,
+            python_version,
+            &[
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                value_ty,
+            ],
+        )
     });
     let iterable_ty = typed_dict.arbitrary_key_mutation_type(db).map(|value_ty| {
-        let item_ty = Type::heterogeneous_tuple(db, [KnownClass::Str.to_instance(db), value_ty]);
-        KnownClass::Iterable.to_specialized_instance(db, &[item_ty])
+        let item_ty = Type::heterogeneous_tuple(
+            db,
+            [
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                value_ty,
+            ],
+        );
+        KnownClass::Iterable.to_specialized_instance_with_version(db, python_version, &[item_ty])
     });
     let value_ty = UnionType::from_elements(
         db,
@@ -533,6 +599,7 @@ fn synthesize_typed_dict_update<'db>(
 /// Synthesize the `pop` method for a `TypedDict`.
 fn synthesize_typed_dict_pop<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -586,7 +653,12 @@ fn synthesize_typed_dict_pop<'db>(
         .chain(
             typed_dict
                 .supports_arbitrary_key_deletion(db)
-                .then(|| pop_overloads(KnownClass::Str.to_instance(db), typed_dict.value_type(db)))
+                .then(|| {
+                    pop_overloads(
+                        KnownClass::Str.to_instance_with_version(db, python_version),
+                        typed_dict.value_type(db),
+                    )
+                })
                 .into_iter()
                 .flatten(),
         );
@@ -602,6 +674,7 @@ fn synthesize_typed_dict_pop<'db>(
 /// Synthesize the `setdefault` method for a `TypedDict`.
 fn synthesize_typed_dict_setdefault<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     fields: TypedDictFields<'db>,
 ) -> Type<'db> {
@@ -630,7 +703,9 @@ fn synthesize_typed_dict_setdefault<'db>(
                         Parameter::positional_only(Some(Name::new_static("self")))
                             .with_annotated_type(instance_ty),
                         Parameter::positional_only(Some(Name::new_static("key")))
-                            .with_annotated_type(KnownClass::Str.to_instance(db)),
+                            .with_annotated_type(
+                                KnownClass::Str.to_instance_with_version(db, python_version),
+                            ),
                         Parameter::positional_only(Some(Name::new_static("default")))
                             .with_annotated_type(default_ty),
                     ];
@@ -691,6 +766,7 @@ fn synthesize_typed_dict_view_method<'db>(
 /// Synthesize a merge operator (`__or__`, `__ror__`, or `__ior__`) for a `TypedDict`.
 fn synthesize_typed_dict_merge<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     instance_ty: Type<'db>,
     name: &str,
 ) -> Type<'db> {
@@ -722,14 +798,21 @@ fn synthesize_typed_dict_merge<'db>(
             instance_ty
         };
 
-        let dict_param_ty = KnownClass::Dict
-            .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), Type::any()]);
-
-        let dict_return_ty = KnownClass::Dict.to_specialized_instance(
+        let dict_param_ty = KnownClass::Dict.to_specialized_instance_with_version(
             db,
+            python_version,
             &[
-                KnownClass::Str.to_instance(db),
-                KnownClass::Object.to_instance(db),
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                Type::any(),
+            ],
+        );
+
+        let dict_return_ty = KnownClass::Dict.to_specialized_instance_with_version(
+            db,
+            python_version,
+            &[
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                KnownClass::Object.to_instance_with_version(db, python_version),
             ],
         );
 
@@ -951,9 +1034,9 @@ impl<'db> DynamicTypedDictLiteral<'db> {
     /// Get the metaclass of this `TypedDict`.
     ///
     /// `TypedDict`s use `type` as their metaclass.
-    #[expect(clippy::unused_self)]
     pub(crate) fn metaclass(self, db: &'db dyn Db) -> Type<'db> {
-        KnownClass::Type.to_class_literal(db)
+        KnownClass::Type
+            .to_class_literal_with_version(db, self.scope(db).python_file(db).python_version(db))
     }
 
     /// Look up a class-level member defined directly on this `TypedDict` (not inherited).
@@ -998,6 +1081,7 @@ impl<'db> DynamicTypedDictLiteral<'db> {
 
 pub(super) fn typed_dict_fallback_class_member<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     module: TypedDictModule,
     lookup_policy: MemberLookupPolicy,
     name: &str,
@@ -1008,7 +1092,7 @@ pub(super) fn typed_dict_fallback_class_member<'db>(
     };
 
     fallback
-        .to_class_literal(db)
+        .to_class_literal_with_version(db, python_version)
         .find_name_in_mro_with_policy(db, name, lookup_policy)
         .expect("Will return Some() when called on class literal")
 }
@@ -1021,19 +1105,29 @@ pub(super) fn typed_dict_class_member<'db>(
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
     let self_class = class.class_literal(db);
-    let fallback_member = typed_dict_fallback_class_member(db, module, lookup_policy, name)
-        .map_type(|ty| {
-            let new_upper_bound = determine_upper_bound(db, self_class, ClassBase::is_typed_dict);
-            let mapping = TypeMapping::ReplaceSelf { new_upper_bound };
-            ty.apply_type_mapping(db, &mapping, TypeContext::default())
-        });
+    let python_version = self_class.python_file(db).python_version(db);
+    let fallback_member =
+        typed_dict_fallback_class_member(db, python_version, module, lookup_policy, name).map_type(
+            |ty| {
+                let new_upper_bound =
+                    determine_upper_bound(db, self_class, ClassBase::is_typed_dict);
+                let mapping = TypeMapping::ReplaceSelf { new_upper_bound };
+                ty.apply_type_mapping(db, &mapping, TypeContext::default())
+            },
+        );
     if !fallback_member.is_undefined() {
         return fallback_member;
     }
 
     if let Some(value_ty) = TypedDictType::new(class).dict_value_type(db)
-        && let Some(dict_class) = KnownClass::Dict
-            .to_specialized_class_type(db, &[KnownClass::Str.to_instance(db), value_ty])
+        && let Some(dict_class) = KnownClass::Dict.to_specialized_class_type_with_version(
+            db,
+            python_version,
+            &[
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                value_ty,
+            ],
+        )
     {
         let member = dict_class.class_member(db, name, lookup_policy);
         if !member.is_undefined() {

@@ -1028,7 +1028,7 @@ fn check_class_namespace_against_metaclass_members<'db>(
 ) {
     let db = context.db();
     let metaclass = class.metaclass(db);
-    if metaclass == KnownClass::Type.to_class_literal(db) {
+    if metaclass == KnownClass::Type.to_class_literal_with_version(db, context.python_version()) {
         return;
     }
 

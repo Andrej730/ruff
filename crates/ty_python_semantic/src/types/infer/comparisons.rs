@@ -2,7 +2,6 @@ use ruff_python_ast as ast;
 use ruff_text_size::TextRange;
 use smallvec::SmallVec;
 
-use crate::Db;
 use crate::types::call::{CallArguments, CallDunderError};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context::InferContext;
@@ -134,7 +133,7 @@ pub(super) fn infer_binary_type_comparison<'db>(
     // - `[ast::CompOp::Is]`: return `false` if unequal, `bool` if equal
     // - `[ast::CompOp::IsNot]`: return `true` if unequal, `bool` if equal
     let try_dunder = |policy: MemberLookupPolicy| {
-        let rich_comparison = |op| infer_rich_comparison(db, left, right, op, policy);
+        let rich_comparison = |op| infer_rich_comparison(context, left, right, op, policy);
         let membership_test_comparison = |op, range: TextRange| {
             infer_membership_test_comparison(context, left, right, op, range)
         };
@@ -156,7 +155,7 @@ pub(super) fn infer_binary_type_comparison<'db>(
                 } else if left.is_singleton(db) && left.is_equivalent_to(db, right) {
                     Ok(Type::bool_literal(true))
                 } else {
-                    Ok(KnownClass::Bool.to_instance(db))
+                    Ok(KnownClass::Bool.to_instance_with_version(db, context.python_version()))
                 }
             }
             ast::CmpOp::IsNot => {
@@ -165,7 +164,7 @@ pub(super) fn infer_binary_type_comparison<'db>(
                 } else if left.is_singleton(db) && left.is_equivalent_to(db, right) {
                     Ok(Type::bool_literal(false))
                 } else {
-                    Ok(KnownClass::Bool.to_instance(db))
+                    Ok(KnownClass::Bool.to_instance_with_version(db, context.python_version()))
                 }
             }
         }
@@ -418,14 +417,16 @@ pub(super) fn infer_binary_type_comparison<'db>(
                         // Even if they are the same value, they may not be the same object.
                         ast::CmpOp::Is => {
                             if n == m {
-                                Ok(KnownClass::Bool.to_instance(db))
+                                Ok(KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version()))
                             } else {
                                 Ok(Type::bool_literal(false))
                             }
                         }
                         ast::CmpOp::IsNot => {
                             if n == m {
-                                Ok(KnownClass::Bool.to_instance(db))
+                                Ok(KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version()))
                             } else {
                                 Ok(Type::bool_literal(true))
                             }
@@ -502,14 +503,16 @@ pub(super) fn infer_binary_type_comparison<'db>(
                         ast::CmpOp::NotIn => Type::bool_literal(!s2.contains(s1)),
                         ast::CmpOp::Is => {
                             if s1 == s2 {
-                                KnownClass::Bool.to_instance(db)
+                                KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version())
                             } else {
                                 Type::bool_literal(false)
                             }
                         }
                         ast::CmpOp::IsNot => {
                             if s1 == s2 {
-                                KnownClass::Bool.to_instance(db)
+                                KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version())
                             } else {
                                 Type::bool_literal(true)
                             }
@@ -539,14 +542,16 @@ pub(super) fn infer_binary_type_comparison<'db>(
                         }
                         ast::CmpOp::Is => {
                             if b1 == b2 {
-                                KnownClass::Bool.to_instance(db)
+                                KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version())
                             } else {
                                 Type::bool_literal(false)
                             }
                         }
                         ast::CmpOp::IsNot => {
                             if b1 == b2 {
-                                KnownClass::Bool.to_instance(db)
+                                KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version())
                             } else {
                                 Type::bool_literal(true)
                             }
@@ -655,7 +660,8 @@ pub(super) fn infer_binary_type_comparison<'db>(
                         } else if !any_ambiguous {
                             Ok(Type::bool_literal(op.is_not_in()))
                         } else {
-                            Ok(KnownClass::Bool.to_instance(db))
+                            Ok(KnownClass::Bool
+                                .to_instance_with_version(db, context.python_version()))
                         }
                     }
                     ast::CmpOp::Is | ast::CmpOp::IsNot => {
@@ -673,7 +679,8 @@ pub(super) fn infer_binary_type_comparison<'db>(
                             // for how we determine the truthiness of a type.
                             ty => match ty.bool(db) {
                                 Truthiness::AlwaysFalse => Type::bool_literal(op.is_is_not()),
-                                _ => KnownClass::Bool.to_instance(db),
+                                _ => KnownClass::Bool
+                                    .to_instance_with_version(db, context.python_version()),
                             },
                         })
                     }
@@ -809,7 +816,8 @@ fn infer_binary_intersection_type_comparison<'db>(
     //
     let mut builder = IntersectionBuilder::new(db);
 
-    builder = builder.add_positive(KnownClass::Bool.to_instance(db));
+    builder = builder
+        .add_positive(KnownClass::Bool.to_instance_with_version(db, context.python_version()));
 
     let mut state = State::NoPositiveElements;
 
@@ -871,12 +879,13 @@ fn infer_binary_intersection_type_comparison<'db>(
 /// This function performs rich comparison between two types and returns the resulting type.
 /// see `<https://docs.python.org/3/reference/datamodel.html#object.__lt__>`
 fn infer_rich_comparison<'db>(
-    db: &'db dyn Db,
+    context: &InferContext<'db, '_>,
     left: Type<'db>,
     right: Type<'db>,
     op: RichCompareOperator,
     policy: MemberLookupPolicy,
 ) -> Result<Type<'db>, UnsupportedComparisonError<'db>> {
+    let db = context.db();
     // The following resource has details about the rich comparison algorithm:
     // https://snarky.ca/unravelling-rich-comparison-operators/
     let call_dunder = |op: RichCompareOperator, left: Type<'db>, right: Type<'db>| {
@@ -906,7 +915,7 @@ fn infer_rich_comparison<'db>(
             // on `object`, so it does not apply if we skip looking up attributes on `object`.
             && !policy.mro_no_object_fallback()
         {
-            Some(KnownClass::Bool.to_instance(db))
+            Some(KnownClass::Bool.to_instance_with_version(db, context.python_version()))
         } else {
             None
         }
@@ -942,7 +951,7 @@ fn infer_membership_test_comparison<'db>(
         // fall back to iteration-based membership test.
         Err(CallDunderError::MethodNotAvailable | CallDunderError::PossiblyUnbound { .. }) => right
             .try_iterate(db)
-            .map(|_| KnownClass::Bool.to_instance(db))
+            .map(|_| KnownClass::Bool.to_instance_with_version(db, context.python_version()))
             .ok(),
         // `__contains__` exists but can't be called with the given arguments.
         Err(CallDunderError::CallError(..)) => None,
@@ -1077,7 +1086,7 @@ fn infer_tuple_rich_comparison<'db>(
         (TupleSpec::Variable(_), _) | (_, TupleSpec::Variable(_))
             if matches!(op, RichCompareOperator::Eq | RichCompareOperator::Ne) =>
         {
-            Ok(KnownClass::Bool.to_instance(db))
+            Ok(KnownClass::Bool.to_instance_with_version(db, context.python_version()))
         }
 
         // At least one variable-length: check all elements that could potentially be compared.
@@ -1101,7 +1110,8 @@ fn infer_tuple_rich_comparison<'db>(
                 builder = builder.add(result);
             }
             // Length comparison (when all elements are equal) returns bool.
-            builder = builder.add(KnownClass::Bool.to_instance(db));
+            builder = builder
+                .add(KnownClass::Bool.to_instance_with_version(db, context.python_version()));
 
             Ok(builder.build())
         }

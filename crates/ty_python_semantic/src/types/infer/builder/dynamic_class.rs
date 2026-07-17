@@ -51,9 +51,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let fn_name = kind.function_name();
         let formal_parameter_type = match kind {
             DynamicClassKind::TypeCall => Type::homogeneous_tuple(db, Type::object()),
-            DynamicClassKind::NewClass => {
-                KnownClass::Iterable.to_specialized_instance(db, &[Type::object()])
-            }
+            DynamicClassKind::NewClass => KnownClass::Iterable
+                .to_specialized_instance_with_version(db, self.python_version(), &[Type::object()]),
         };
 
         if !bases_type.is_assignable_to(db, formal_parameter_type)
@@ -290,7 +289,8 @@ pub(super) fn report_mro_error_kind<'db>(
             };
             let bases_tuple_elts = bases.as_tuple_expr().map(|tuple| tuple.elts.as_slice());
             for (idx, base_type) in invalid_bases {
-                let instance_of_type = KnownClass::Type.to_instance(db);
+                let instance_of_type =
+                    KnownClass::Type.to_instance_with_version(db, context.python_version());
                 let specific_base = bases_tuple_elts.and_then(|elts| elts.get(*idx));
                 let diagnostic_range = specific_base
                     .map(ast::Expr::range)

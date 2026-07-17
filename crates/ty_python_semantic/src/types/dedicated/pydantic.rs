@@ -832,7 +832,11 @@ fn lax_input_type_impl<'db>(
             elements.homogeneous_element_type(db),
             expanding_types,
         );
-        return KnownClass::Iterable.to_specialized_instance(db, &[element_type]);
+        return KnownClass::Iterable.to_specialized_instance_with_version(
+            db,
+            python_version,
+            &[element_type],
+        );
     }
 
     if matches!(known_class, Some(KnownClass::Dict | KnownClass::Mapping)) {
@@ -845,7 +849,11 @@ fn lax_input_type_impl<'db>(
             return Type::any();
         };
         let value_type = lax_input_type_impl(db, python_version, *value_type, expanding_types);
-        return KnownClass::Mapping.to_specialized_instance(db, &[*key_type, value_type]);
+        return KnownClass::Mapping.to_specialized_instance_with_version(
+            db,
+            python_version,
+            &[*key_type, value_type],
+        );
     }
 
     let builtin_alias = match known_class {

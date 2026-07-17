@@ -33,6 +33,7 @@ use ty_python_core::scope::ScopeId;
 use ty_python_core::{ExpressionNodeKey, NarrowingEvaluator, place_table, semantic_index};
 
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
+use ruff_python_ast::PythonVersion;
 use ruff_python_ast::name::Name;
 use ruff_python_stdlib::identifiers::is_identifier;
 
@@ -924,13 +925,18 @@ fn merge_constraints_or<'db>(
 /// value of `PatternClass` may be a subclass of `A`.
 fn positive_class_pattern_type<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     class_expression_ty: Type<'db>,
 ) -> Option<Type<'db>> {
     match class_expression_ty {
         Type::SpecialForm(SpecialFormType::CollectionsAbcCallable) => {
             Some(callable_pattern_type(db))
         }
-        _ if class_expression_ty.is_assignable_to(db, KnownClass::Type.to_instance(db)) => {
+        _ if class_expression_ty.is_assignable_to(
+            db,
+            KnownClass::Type.to_instance_with_version(db, python_version),
+        ) =>
+        {
             ClassInfoConstraintFunction::IsInstance.generate_constraint(
                 db,
                 class_expression_ty,
@@ -1000,6 +1006,7 @@ fn necessary_match_pattern_type<'db>(
         PatternPredicateKind::Singleton(singleton) => singleton_pattern_type(db, *singleton),
         PatternPredicateKind::Class(kind) => positive_class_pattern_type(
             db,
+            kind.class.python_file(db).python_version(db),
             infer_same_file_expression_type(db, kind.class, TypeContext::default()),
         )
         .unwrap_or_else(Type::object),
@@ -1938,8 +1945,12 @@ impl<'db> PatternSuccessAnalyzer<'db> {
             let class = class_expr_ty.as_class_literal();
             ClassPatternContext {
                 class,
-                class_ty: positive_class_pattern_type(self.db, class_expr_ty)
-                    .unwrap_or_else(Type::object),
+                class_ty: positive_class_pattern_type(
+                    self.db,
+                    self.scope.python_file(self.db).python_version(self.db),
+                    class_expr_ty,
+                )
+                .unwrap_or_else(Type::object),
                 positional_sources: class.map_or_else(
                     || vec![ClassPatternPositionalSource::Unknown; kind.positional.len()],
                     |class| class_pattern_positional_sources(self.db, class, kind.positional.len()),
@@ -2265,13 +2276,21 @@ impl<'db> PatternSuccessAnalyzer<'db> {
     }
 
     fn mapping_pattern_rest_type_for_arm(&self, subject_ty: Type<'db>) -> Type<'db> {
+        let python_version = self.scope.python_file(self.db).python_version(self.db);
         let (key_ty, value_ty) = match subject_ty.resolve_type_alias(self.db) {
-            Type::TypedDict(_) => (KnownClass::Str.to_instance(self.db), Type::object()),
+            Type::TypedDict(_) => (
+                KnownClass::Str.to_instance_with_version(self.db, python_version),
+                Type::object(),
+            ),
             _ => subject_ty
                 .unpack_keys_and_items(self.db)
                 .unwrap_or_else(|| (Type::unknown(), Type::unknown())),
         };
-        KnownClass::Dict.to_specialized_instance(self.db, &[key_ty, value_ty])
+        KnownClass::Dict.to_specialized_instance_with_version(
+            self.db,
+            python_version,
+            &[key_ty, value_ty],
+        )
     }
 
     fn matched_sequence_pattern_subject_type(

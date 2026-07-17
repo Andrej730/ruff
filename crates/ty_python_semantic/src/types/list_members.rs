@@ -363,11 +363,13 @@ impl<'db> AllMembers<'db> {
             }
 
             Type::ModuleLiteral(literal) => {
+                let module = literal.module(db);
+                let python_version = module.python_version(db);
                 // Looking up `__file__` on `types.ModuleType` will not give as precise a type
                 // as we infer in type inference, but it's confusing if autocomplete etc.
                 // shows a different type in the tooltip to the one inferred by the type checker.
-                let dunder_file_type = if literal.module(db).file(db).is_some() {
-                    KnownClass::Str.to_instance(db)
+                let dunder_file_type = if module.file(db).is_some() {
+                    KnownClass::Str.to_instance_with_version(db, python_version)
                 } else {
                     Type::none(db)
                 };
@@ -376,8 +378,10 @@ impl<'db> AllMembers<'db> {
                     ty: dunder_file_type,
                 });
 
-                self.extend_with_type(db, KnownClass::ModuleType.to_instance(db));
-                let module = literal.module(db);
+                self.extend_with_type(
+                    db,
+                    KnownClass::ModuleType.to_instance_with_version(db, python_version),
+                );
 
                 let Some(python_file) = module.python_file(db) else {
                     return;
@@ -391,7 +395,8 @@ impl<'db> AllMembers<'db> {
                 for (symbol_id, _) in use_def_map.all_end_of_scope_symbol_declarations() {
                     let symbol_name = place_table.symbol(symbol_id).name();
                     let Place::Defined(DefinedPlace { ty, .. }) =
-                        imported_symbol(db, Some(python_file), symbol_name, None).place
+                        imported_symbol(db, Some(python_file), python_version, symbol_name, None)
+                            .place
                     else {
                         continue;
                     };

@@ -92,9 +92,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // The fallback type reflects the fact that if the call were successful,
         // it would return a class that is a subclass of `Mapping[str, object]`
         // with an unknown set of fields.
-        let fallback = || {
-            let spec = &[KnownClass::Str.to_instance(db), Type::object()];
-            let str_object_map = KnownClass::Mapping.to_specialized_subclass_of(db, spec);
+        let fallback = |python_version| {
+            let spec = &[
+                KnownClass::Str.to_instance_with_version(db, python_version),
+                Type::object(),
+            ];
+            let str_object_map = KnownClass::Mapping.to_specialized_subclass_of_with_version(
+                db,
+                python_version,
+                spec,
+            );
             IntersectionType::from_two_elements(db, str_object_map, Type::unknown())
         };
 
@@ -212,7 +219,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             for arg in args {
                 self.infer_expression(arg, TypeContext::default());
             }
-            return fallback();
+            return fallback(self.python_version());
         }
 
         if args.len() > 2
@@ -234,7 +241,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 );
             }
 
-            return fallback();
+            return fallback(self.python_version());
         };
 
         let name_type = self.infer_expression(name_arg, TypeContext::default());
@@ -245,7 +252,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     "No argument provided for required parameter `fields` of function `TypedDict`",
                 );
             }
-            return fallback();
+            return fallback(self.python_version());
         };
 
         for arg in args.iter().skip(2) {
@@ -257,7 +264,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .map(|literal| literal.value(db));
 
         if name.is_none()
-            && !name_type.is_assignable_to(db, KnownClass::Str.to_instance(db))
+            && !name_type.is_assignable_to(
+                db,
+                KnownClass::Str.to_instance_with_version(db, self.python_version()),
+            )
             && let Some(builder) = self.context.report_lint(&INVALID_ARGUMENT_TYPE, name_arg)
         {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -347,7 +357,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             {
                 self.infer_expression(&item.value, TypeContext::new(Some(field.declared_ty)))
             } else if key_ty.is_some_and(|key_ty| {
-                key_ty.is_assignable_to(self.db(), KnownClass::Str.to_instance(self.db()))
+                key_ty.is_assignable_to(
+                    self.db(),
+                    KnownClass::Str.to_instance_with_version(self.db(), self.python_version()),
+                )
             }) && let Some(value_ty) =
                 typed_dict.arbitrary_key_initialization_type(self.db())
             {
@@ -486,7 +499,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             {
                 TypeContext::new(Some(field.declared_ty))
             } else if key_ty.is_some_and(|key_ty| {
-                key_ty.is_assignable_to(self.db(), KnownClass::Str.to_instance(self.db()))
+                key_ty.is_assignable_to(
+                    self.db(),
+                    KnownClass::Str.to_instance_with_version(self.db(), self.python_version()),
+                )
             }) {
                 TypeContext::new(typed_dict.arbitrary_key_initialization_type(self.db()))
             } else {

@@ -10,7 +10,7 @@ use ruff_python_ast::find_node::{CoveringNode, covering_node};
 use ruff_python_ast::name::{Name, UnqualifiedName};
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::token::{Token, TokenKind, Tokens};
-use ruff_python_ast::{self as ast, AnyNodeRef};
+use ruff_python_ast::{self as ast, AnyNodeRef, PythonVersion};
 use ruff_python_codegen::Stylist;
 use ruff_python_literal::escape::{Escape, UnicodeEscape};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -772,7 +772,9 @@ impl<'m> Context<'m> {
         match self.kind {
             ContextKind::Keywords(_) | ContextKind::Import(_) => CollectionContext::none(),
             ContextKind::NonImport(_) => {
-                let exception_ty = self.cursor.exception_ty(db);
+                let exception_ty = self
+                    .cursor
+                    .exception_ty(db, model.python_file().python_version(db));
                 let complete_callable_parentheses = settings.complete_function_parentheses
                     && !self.cursor.suppress_callable_parentheses();
                 let existing_class_bases = self.cursor.enclosing_class_def().map(|class_def| {
@@ -1307,9 +1309,15 @@ impl<'m> ContextCursor<'m> {
     ///
     /// The return value is always `None` if the cursor is not
     /// inside a `raise` or `except` context.
-    fn exception_ty<'db>(&self, db: &'db dyn Db) -> Option<Type<'db>> {
-        let base_exception_ty = KnownClass::BaseException.to_subclass_of(db);
-        let base_exception_instance = KnownClass::BaseException.to_instance(db);
+    fn exception_ty<'db>(
+        &self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> Option<Type<'db>> {
+        let base_exception_ty =
+            KnownClass::BaseException.to_subclass_of_with_version(db, python_version);
+        let base_exception_instance =
+            KnownClass::BaseException.to_instance_with_version(db, python_version);
         let raise_ty = UnionType::from_elements(db, [base_exception_ty, base_exception_instance]);
         let cause_ty = UnionType::from_elements(db, [raise_ty, Type::none(db)]);
         let except_ty = UnionType::from_elements(
@@ -1965,7 +1973,10 @@ fn add_class_arg_completions<'db>(
     };
 
     if !is_set("metaclass") {
-        let ty = KnownClass::Type.to_subclass_of(model.db());
+        let ty = KnownClass::Type.to_subclass_of_with_version(
+            model.db(),
+            model.python_file().python_version(model.db()),
+        );
         completions.add(CompletionBuilder::argument("metaclass").ty(ty));
     }
 
@@ -1979,7 +1990,8 @@ fn add_class_arg_completions<'db>(
     //
     // See https://peps.python.org/pep-0728/
     if is_typed_dict && !is_set("total") {
-        let ty = KnownClass::Bool.to_instance(model.db());
+        let ty = KnownClass::Bool
+            .to_instance_with_version(model.db(), model.python_file().python_version(model.db()));
         completions.add(CompletionBuilder::argument("total").ty(ty));
     }
 }

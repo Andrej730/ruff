@@ -113,7 +113,7 @@ pub(super) fn synthesize_namedtuple_class_member<'db>(
         _ => {
             // Fall back to NamedTupleFallback for other synthesized methods.
             KnownClass::NamedTupleFallback
-                .to_class_literal(db)
+                .to_class_literal_with_version(db, python_version)
                 .as_class_literal()?
                 .as_static()?
                 .own_class_member(db, inherited_generic_context, None, name)
@@ -276,8 +276,8 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
     ///
     /// Namedtuples always have `type` as their metaclass.
     pub(crate) fn metaclass(self, db: &'db dyn Db) -> Type<'db> {
-        let _ = self;
-        KnownClass::Type.to_class_literal(db)
+        KnownClass::Type
+            .to_class_literal_with_version(db, self.scope(db).python_file(db).python_version(db))
     }
 
     /// Compute the specialized tuple class that this namedtuple inherits from.
@@ -295,7 +295,10 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
             .map(|t| t.to_class_type(db))
             .unwrap_or_else(|| {
                 KnownClass::Tuple
-                    .to_class_literal(db)
+                    .to_class_literal_with_version(
+                        db,
+                        self.scope(db).python_file(db).python_version(db),
+                    )
                     .as_class_literal()
                     .expect("tuple should be a class literal")
                     .default_specialization(db)
@@ -389,7 +392,10 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
                 // For other field-specific methods, fall through to NamedTupleFallback.
                 "__match_args__" | "_fields" | "_replace" | "__replace__" => {
                     return KnownClass::NamedTupleFallback
-                        .to_class_literal(db)
+                        .to_class_literal_with_version(
+                            db,
+                            self.scope(db).python_file(db).python_version(db),
+                        )
                         .as_class_literal()?
                         .as_static()?
                         .own_class_member(db, None, None, name)

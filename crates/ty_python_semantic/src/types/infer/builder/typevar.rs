@@ -761,16 +761,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             if let Some(builder) = context.report_lint(&INVALID_LEGACY_TYPE_VARIABLE, node) {
                 builder.into_diagnostic(message);
             }
-            KnownClass::TypeVarTuple.to_instance(context.db())
+            KnownClass::TypeVarTuple
+                .to_instance_with_version(context.db(), context.python_version())
         }
 
         let db = self.db();
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsTypeVarTuple;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = self.python_version();
-        let have_features_from =
-            |version: PythonVersion| assume_all_features || python_version >= version;
 
         let mut default = None;
         let mut covariant = false;
@@ -817,7 +815,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         Some(self.infer_expression(&kwarg.value, TypeContext::default()));
                 }
                 "default" => {
-                    if !have_features_from(PythonVersion::PY313) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY313 {
                         error(
                             &self.context,
                             "The `default` parameter of `typing.TypeVarTuple` was added in Python 3.13",
@@ -827,7 +825,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     default = Some(TypeVarDefaultEvaluation::Lazy);
                 }
                 "bound" => {
-                    if !have_features_from(PythonVersion::PY315) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY315 {
                         return error(
                             &self.context,
                             "The `bound` parameter of `typing.TypeVarTuple` was added in Python 3.15",
@@ -841,7 +839,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     );
                 }
                 "covariant" => {
-                    if !have_features_from(PythonVersion::PY315) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY315 {
                         error(
                             &self.context,
                             "The `covariant` parameter of `typing.TypeVarTuple` was added in Python 3.15",
@@ -865,7 +863,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
                 "contravariant" => {
-                    if !have_features_from(PythonVersion::PY315) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY315 {
                         error(
                             &self.context,
                             "The `contravariant` parameter of `typing.TypeVarTuple` was added in Python 3.15",
@@ -889,7 +887,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
                 "infer_variance" => {
-                    if !have_features_from(PythonVersion::PY315) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY315 {
                         error(
                             &self.context,
                             "The `infer_variance` parameter of `typing.TypeVarTuple` was added in Python 3.15",
@@ -1023,16 +1021,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             // If the call doesn't create a valid paramspec, we'll emit diagnostics and fall back to
             // just creating a regular instance of `typing.ParamSpec`.
-            KnownClass::ParamSpec.to_instance(context.db())
+            KnownClass::ParamSpec.to_instance_with_version(context.db(), context.python_version())
         }
 
         let db = self.db();
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsParamSpec;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = self.python_version();
-        let have_features_from =
-            |version: PythonVersion| assume_all_features || python_version >= version;
 
         let mut default = None;
         let mut covariant = false;
@@ -1088,7 +1083,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     );
                 }
                 "infer_variance" => {
-                    if !have_features_from(PythonVersion::PY312) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY312 {
                         error(
                             &self.context,
                             "The `infer_variance` parameter of `typing.ParamSpec` was added in Python 3.12",
@@ -1146,7 +1141,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
                 "default" => {
-                    if !have_features_from(PythonVersion::PY313) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY313 {
                         // We don't return here; this error is informational since this will error
                         // at runtime, but the user's intent is plain, we may as well respect it.
                         error(
@@ -1270,16 +1265,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             // If the call doesn't create a valid typevar, we'll emit diagnostics and fall back to
             // just creating a regular instance of `typing.TypeVar`.
-            KnownClass::TypeVar.to_instance(context.db())
+            KnownClass::TypeVar.to_instance_with_version(context.db(), context.python_version())
         }
 
         let db = self.db();
         let arguments = &call_expr.arguments;
         let is_typing_extensions = known_class == KnownClass::ExtensionsTypeVar;
         let assume_all_features = self.in_stub() || is_typing_extensions;
-        let python_version = self.python_version();
-        let have_features_from =
-            |version: PythonVersion| assume_all_features || python_version >= version;
 
         let mut has_bound = false;
         let mut default = None;
@@ -1356,7 +1348,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
                 "default" => {
-                    if !have_features_from(PythonVersion::PY313) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY313 {
                         // We don't return here; this error is informational since this will error
                         // at runtime, but the user's intent is plain, we may as well respect it.
                         error(
@@ -1369,7 +1361,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     default = Some(TypeVarDefaultEvaluation::Lazy);
                 }
                 "infer_variance" => {
-                    if !have_features_from(PythonVersion::PY312) {
+                    if !assume_all_features && self.python_version() < PythonVersion::PY312 {
                         // We don't return here; this error is informational since this will error
                         // at runtime, but the user's intent is plain, we may as well respect it.
                         error(

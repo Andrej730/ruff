@@ -766,7 +766,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     fn python_version(&self) -> PythonVersion {
-        self.python_file().python_version(self.db())
+        self.context.python_version()
     }
 
     fn module(&self) -> &'ast ParsedModuleRef {
@@ -2239,7 +2239,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let node_ty = node.map_or(Type::unknown(), |ty| {
             self.infer_expression(ty, TypeContext::default())
         });
-        let type_base_exception = KnownClass::BaseException.to_subclass_of(self.db());
+        let type_base_exception =
+            KnownClass::BaseException.to_subclass_of_with_version(self.db(), self.python_version());
 
         // If it's an `except*` handler, this won't actually be the type of the bound symbol;
         // it will actually be the type of the generic parameters to `BaseExceptionGroup` or `ExceptionGroup`.
@@ -2298,7 +2299,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ) {
             // TODO: Handle valid handler expressions that are opaque to the structural helper
             // above, for example a type variable bounded by the full class-or-tuple union.
-            KnownClass::BaseException.to_instance(self.db())
+            KnownClass::BaseException.to_instance_with_version(self.db(), self.python_version())
         } else {
             if let Some(node) = node {
                 report_invalid_exception_caught(&self.context, node, node_ty);
@@ -2307,14 +2308,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         if is_star {
-            let class = if symbol_ty
-                .is_subtype_of(self.db(), KnownClass::Exception.to_instance(self.db()))
-            {
+            let class = if symbol_ty.is_subtype_of(
+                self.db(),
+                KnownClass::Exception.to_instance_with_version(self.db(), self.python_version()),
+            ) {
                 KnownClass::ExceptionGroup
             } else {
                 KnownClass::BaseExceptionGroup
             };
-            class.to_specialized_instance(self.db(), &[symbol_ty])
+            class.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[symbol_ty],
+            )
         } else {
             symbol_ty
         }
@@ -2362,13 +2368,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         debug_assert!(specialization.is_some_and(|specialization_type| {
                             specialization_type.is_assignable_to(
                                 self.db(),
-                                KnownClass::BaseException.to_instance(self.db()),
+                                KnownClass::BaseException
+                                    .to_instance_with_version(self.db(), self.python_version()),
                             )
                         }));
 
                         specialization
                     })
-                    .unwrap_or_else(|| KnownClass::BaseException.to_instance(self.db())),
+                    .unwrap_or_else(|| {
+                        KnownClass::BaseException
+                            .to_instance_with_version(self.db(), self.python_version())
+                    }),
             )
         } else if let Type::Union(union) = ty {
             // `except exception_types as e:`, where
@@ -2648,7 +2658,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
             }
-        } else if !cls_ty.is_assignable_to(self.db(), KnownClass::Type.to_instance(self.db())) {
+        } else if !cls_ty.is_assignable_to(
+            self.db(),
+            KnownClass::Type.to_instance_with_version(self.db(), self.python_version()),
+        ) {
             report_invalid_class_match_pattern(&self.context, &*pattern.cls, cls_ty);
         }
     }
@@ -4187,7 +4200,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .is_some_and(|name| &name.id == "TYPE_CHECKING")
         {
             if !KnownClass::Bool
-                .to_instance(self.db())
+                .to_instance_with_version(self.db(), self.python_version())
                 .is_assignable_to(self.db(), declared.inner_type())
             {
                 // annotation not assignable from `bool` is an error
@@ -4697,8 +4710,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             cause,
         } = raise;
 
-        let base_exception_type = KnownClass::BaseException.to_subclass_of(self.db());
-        let base_exception_instance = KnownClass::BaseException.to_instance(self.db());
+        let base_exception_type =
+            KnownClass::BaseException.to_subclass_of_with_version(self.db(), self.python_version());
+        let base_exception_instance =
+            KnownClass::BaseException.to_instance_with_version(self.db(), self.python_version());
 
         let can_be_raised =
             UnionType::from_two_elements(self.db(), base_exception_type, base_exception_instance);
@@ -6245,12 +6260,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
 
         match value {
-            ast::Number::Int(n) => n
-                .as_i64()
-                .map(Type::int_literal)
-                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
-            ast::Number::Float(_) => KnownClass::Float.to_instance(db),
-            ast::Number::Complex { .. } => KnownClass::Complex.to_instance(db),
+            ast::Number::Int(n) => n.as_i64().map(Type::int_literal).unwrap_or_else(|| {
+                KnownClass::Int.to_instance_with_version(db, self.python_version())
+            }),
+            ast::Number::Float(_) => {
+                KnownClass::Float.to_instance_with_version(db, self.python_version())
+            }
+            ast::Number::Complex { .. } => {
+                KnownClass::Complex.to_instance_with_version(db, self.python_version())
+            }
         }
     }
 
@@ -6362,7 +6380,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
         }
-        collector.string_type(self.db())
+        collector.string_type(&self.context)
     }
 
     fn infer_tstring_expression(&mut self, tstring: &ast::ExprTString) -> Type<'db> {
@@ -6389,14 +6407,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
         }
-        KnownClass::Template.to_instance(self.db())
+        KnownClass::Template.to_instance_with_version(self.db(), self.python_version())
     }
 
     fn infer_ellipsis_literal_expression(
         &mut self,
         _literal: &ast::ExprEllipsisLiteral,
     ) -> Type<'db> {
-        KnownClass::EllipsisType.to_instance(self.db())
+        KnownClass::EllipsisType.to_instance_with_version(self.db(), self.python_version())
     }
 
     fn infer_tuple_expression(
@@ -6420,7 +6438,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Remove any union elements of the annotation that are unrelated to the tuple type.
         let tcx = tcx.map(|annotation| {
             let inferable = KnownClass::Tuple
-                .try_to_class_literal(self.db())
+                .try_to_class_literal_with_version(self.db(), self.python_version())
                 .and_then(|class| class.generic_context(self.db()))
                 .map(|generic_context| generic_context.inferable_typevars(self.db()))
                 .unwrap_or(InferableTypeVars::None);
@@ -6472,7 +6490,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let ctx = if can_use_type_context {
                 let expected = if elt.is_starred_expr() {
                     let expected_element = annotated_elt_ty.unwrap_or_else(Type::object);
-                    Some(KnownClass::Iterable.to_specialized_instance(db, &[expected_element]))
+                    Some(KnownClass::Iterable.to_specialized_instance_with_version(
+                        db,
+                        self.python_version(),
+                        &[expected_element],
+                    ))
                 } else {
                     annotated_elt_ty
                 };
@@ -6546,7 +6568,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &mut infer_elt_ty,
             tcx,
         )
-        .unwrap_or_else(|| KnownClass::List.to_specialized_instance(self.db(), &[Type::unknown()]))
+        .unwrap_or_else(|| {
+            KnownClass::List.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown()],
+            )
+        })
     }
 
     fn infer_set_expression(&mut self, set: &ast::ExprSet, tcx: TypeContext<'db>) -> Type<'db> {
@@ -6570,7 +6598,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &mut infer_elt_ty,
             tcx,
         )
-        .unwrap_or_else(|| KnownClass::Set.to_specialized_instance(self.db(), &[Type::unknown()]))
+        .unwrap_or_else(|| {
+            KnownClass::Set.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown()],
+            )
+        })
     }
 
     /// Infers a set element, optionally with a fallback context for an incomplete `TypedDict` key.
@@ -6743,7 +6777,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             tcx,
         )
         .unwrap_or_else(|| {
-            KnownClass::Dict.to_specialized_instance(self.db(), &[Type::unknown(), Type::unknown()])
+            KnownClass::Dict.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown(), Type::unknown()],
+            )
         })
     }
 
@@ -6814,7 +6852,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Extract the type variable `T` from `list[T]` in typeshed.
         let elt_tys = |collection_class: KnownClass| {
             let collection_alias = collection_class
-                .try_to_class_literal(self.db())?
+                .try_to_class_literal_with_version(self.db(), self.python_version())?
                 .identity_specialization(self.db())
                 .into_generic_alias()?;
 
@@ -6849,7 +6887,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // For example, we only want the `list[int]` from `annotation: list[int] | None` if
         // `collection_ty` is `list`.
         let tcx = tcx.map(|annotation| {
-            let collection_ty = collection_class.to_instance(self.db());
+            let collection_ty =
+                collection_class.to_instance_with_version(self.db(), self.python_version());
             annotation.filter_disjoint_elements(self.db(), collection_ty, inferable)
         });
 
@@ -7318,9 +7357,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let yield_ty = Type::TypeVar(yield_typevar);
         let none = Type::none(db);
         let generator_ty = if evaluation_mode.is_async() {
-            KnownClass::AsyncGeneratorType.to_specialized_instance(db, &[yield_ty, none])
+            KnownClass::AsyncGeneratorType.to_specialized_instance_with_version(
+                db,
+                self.python_version(),
+                &[yield_ty, none],
+            )
         } else {
-            KnownClass::GeneratorType.to_specialized_instance(db, &[yield_ty, none, none])
+            KnownClass::GeneratorType.to_specialized_instance_with_version(
+                db,
+                self.python_version(),
+                &[yield_ty, none, none],
+            )
         };
 
         let generic_context = GenericContext::from_typevar_instances(db, [yield_typevar]);
@@ -7380,11 +7427,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let yield_type = self.comprehension_element_type(elt, inference);
 
         if evaluation_mode.is_async() {
-            KnownClass::AsyncGeneratorType
-                .to_specialized_instance(self.db(), &[yield_type, Type::none(self.db())])
-        } else {
-            KnownClass::GeneratorType.to_specialized_instance(
+            KnownClass::AsyncGeneratorType.to_specialized_instance_with_version(
                 self.db(),
+                self.python_version(),
+                &[yield_type, Type::none(self.db())],
+            )
+        } else {
+            KnownClass::GeneratorType.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
                 &[yield_type, Type::none(self.db()), Type::none(self.db())],
             )
         }
@@ -7458,7 +7509,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             inference,
             tcx,
         )
-        .unwrap_or_else(|| KnownClass::List.to_specialized_instance(self.db(), &[Type::unknown()]))
+        .unwrap_or_else(|| {
+            KnownClass::List.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown()],
+            )
+        })
     }
 
     fn infer_set_comprehension_expression(
@@ -7492,7 +7549,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             inference,
             tcx,
         )
-        .unwrap_or_else(|| KnownClass::Set.to_specialized_instance(self.db(), &[Type::unknown()]))
+        .unwrap_or_else(|| {
+            KnownClass::Set.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown()],
+            )
+        })
     }
 
     fn infer_dict_comprehension_expression(
@@ -7528,7 +7591,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             tcx,
         )
         .unwrap_or_else(|| {
-            KnownClass::Dict.to_specialized_instance(self.db(), &[Type::unknown(), Type::unknown()])
+            KnownClass::Dict.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[Type::unknown(), Type::unknown()],
+            )
         })
     }
 
@@ -7546,7 +7613,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = generator;
 
         let elt_tcx = if elt.is_starred_expr() {
-            tcx.map(|yield_ty| KnownClass::Iterable.to_specialized_instance(self.db(), &[yield_ty]))
+            tcx.map(|yield_ty| {
+                KnownClass::Iterable.to_specialized_instance_with_version(
+                    self.db(),
+                    self.python_version(),
+                    &[yield_ty],
+                )
+            })
         } else {
             tcx
         };
@@ -9003,7 +9076,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let return_type_span = enclosing_function.spans(self.db()).return_type;
 
         let tcx = TypeContext::new(outer_expected.yield_ty.map(|yielded_ty| {
-            KnownClass::Iterable.to_specialized_instance(self.db(), &[yielded_ty])
+            KnownClass::Iterable.to_specialized_instance_with_version(
+                self.db(),
+                self.python_version(),
+                &[yielded_ty],
+            )
         }));
         let iterable_type = self.infer_expression(value, tcx);
 
@@ -9062,7 +9139,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let expr_type = self.infer_expression(
             value,
-            tcx.map(|tcx| KnownClass::Awaitable.to_specialized_instance(self.db(), &[tcx])),
+            tcx.map(|tcx| {
+                KnownClass::Awaitable.to_specialized_instance_with_version(
+                    self.db(),
+                    self.python_version(),
+                    &[tcx],
+                )
+            }),
         );
 
         expr_type.try_await(self.db()).unwrap_or_else(|err| {
@@ -10042,7 +10125,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                     if value_type.is_callable_type()
                         && KnownClass::FunctionType
-                            .to_instance(db)
+                            .to_instance_with_version(db, self.python_version())
                             .member(db, attr_name)
                             .place
                             .is_definitely_bound()
@@ -10290,7 +10373,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .as_i64()
                     .checked_neg()
                     .map(Type::int_literal)
-                    .unwrap_or_else(|| KnownClass::Int.to_instance(self.db())),
+                    .unwrap_or_else(|| {
+                        KnownClass::Int.to_instance_with_version(self.db(), self.python_version())
+                    }),
                 LiteralValueTypeKind::Bool(value) => Type::int_literal(-i64::from(value)),
                 _ => fallback_unary_expression_type(),
             },
@@ -10613,7 +10698,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     match op {
                         // `in, not in, is, is not` always return bool instances
                         ast::CmpOp::In | ast::CmpOp::NotIn | ast::CmpOp::Is | ast::CmpOp::IsNot => {
-                            KnownClass::Bool.to_instance(builder.db())
+                            KnownClass::Bool
+                                .to_instance_with_version(builder.db(), builder.python_version())
                         }
                         // Other operators can return arbitrary types
                         _ => Type::unknown(),
@@ -11636,9 +11722,10 @@ impl StringPartsCollector {
         self.contains_non_literal_str = true;
     }
 
-    fn string_type(self, db: &dyn Db) -> Type<'_> {
+    fn string_type<'db>(self, context: &InferContext<'db, '_>) -> Type<'db> {
+        let db = context.db();
         if self.contains_non_literal_str {
-            KnownClass::Str.to_instance(db)
+            KnownClass::Str.to_instance_with_version(db, context.python_version())
         } else if let Some(concatenated) = self.concatenated {
             Type::string_literal(db, &concatenated)
         } else {

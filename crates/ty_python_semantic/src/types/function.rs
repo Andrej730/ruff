@@ -942,7 +942,7 @@ impl<'db> FunctionLiteral<'db> {
             let file = definition.file(db);
             let module = parsed_module(db, definition.python_file(db)).load(db);
             let node = implementation.node(db, file, &module);
-            function_body_kind(db, node, |expr| {
+            function_body_kind(db, definition.python_file(db), node, |expr| {
                 definition_expression_type(db, definition, expr)
             })
         }
@@ -1858,7 +1858,10 @@ fn is_instance_truthiness<'db>(
             )
         }
 
-        Type::ClassLiteral(..) => always_true_if(is_instance(&KnownClass::Type.to_instance(db))),
+        Type::ClassLiteral(..) => always_true_if(is_instance(
+            &KnownClass::Type
+                .to_instance_with_version(db, class.python_file(db).python_version(db)),
+        )),
 
         Type::TypeAlias(alias) => is_instance_truthiness(db, alias.value_type(db), class),
 
@@ -1925,6 +1928,7 @@ pub(crate) fn function_has_stub_body(node: &ast::StmtFunctionDef) -> bool {
 /// the analysis is only done on the remaining statements if the first is a docstring.
 pub(super) fn function_body_kind<'db>(
     db: &'db dyn Db,
+    python_file: PythonFile<'db>,
     node: &ast::StmtFunctionDef,
     infer_type: impl Fn(&ast::Expr) -> Type<'db>,
 ) -> FunctionBodyKind {
@@ -1942,16 +1946,18 @@ pub(super) fn function_body_kind<'db>(
             node_index: _,
             range: _,
         } = raise
-        && infer_type(exc).is_subtype_of(
+    {
+        let python_version = python_file.python_version(db);
+        if infer_type(exc).is_subtype_of(
             db,
             UnionType::from_two_elements(
                 db,
-                KnownClass::NotImplementedError.to_class_literal(db),
-                KnownClass::NotImplementedError.to_instance(db),
+                KnownClass::NotImplementedError.to_class_literal_with_version(db, python_version),
+                KnownClass::NotImplementedError.to_instance_with_version(db, python_version),
             ),
-        )
-    {
-        return FunctionBodyKind::AlwaysRaisesNotImplementedError;
+        ) {
+            return FunctionBodyKind::AlwaysRaisesNotImplementedError;
+        }
     }
 
     FunctionBodyKind::Regular

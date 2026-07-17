@@ -548,7 +548,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         n.as_i64()
                             .checked_add(m.as_i64())
                             .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+                            .unwrap_or_else(|| {
+                                KnownClass::Int.to_instance_with_version(db, self.python_version())
+                            }),
                     ),
 
                     (
@@ -559,7 +561,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         n.as_i64()
                             .checked_sub(m.as_i64())
                             .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+                            .unwrap_or_else(|| {
+                                KnownClass::Int.to_instance_with_version(db, self.python_version())
+                            }),
                     ),
 
                     (
@@ -570,14 +574,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         n.as_i64()
                             .checked_mul(m.as_i64())
                             .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+                            .unwrap_or_else(|| {
+                                KnownClass::Int.to_instance_with_version(db, self.python_version())
+                            }),
                     ),
 
                     (
                         LiteralValueTypeKind::Int(_),
                         LiteralValueTypeKind::Int(_),
                         ast::Operator::Div,
-                    ) => Some(KnownClass::Float.to_instance(db)),
+                    ) => {
+                        Some(KnownClass::Float.to_instance_with_version(db, self.python_version()))
+                    }
 
                     (
                         LiteralValueTypeKind::Int(n),
@@ -593,8 +601,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         {
                             q = q.map(|q| q - 1);
                         }
-                        q.map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+                        q.map(Type::int_literal).unwrap_or_else(|| {
+                            KnownClass::Int.to_instance_with_version(db, self.python_version())
+                        })
                     }),
 
                     (
@@ -611,8 +620,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         {
                             r = r.map(|x| x + m.as_i64());
                         }
-                        r.map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+                        r.map(Type::int_literal).unwrap_or_else(|| {
+                            KnownClass::Int.to_instance_with_version(db, self.python_version())
+                        })
                     }),
 
                     (
@@ -621,13 +631,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         ast::Operator::Pow,
                     ) => Some({
                         if m.as_i64() < 0 {
-                            KnownClass::Float.to_instance(db)
+                            KnownClass::Float.to_instance_with_version(db, self.python_version())
                         } else {
                             u32::try_from(m.as_i64())
                                 .ok()
                                 .and_then(|m| n.as_i64().checked_pow(m))
                                 .map(Type::int_literal)
-                                .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+                                .unwrap_or_else(|| {
+                                    KnownClass::Int
+                                        .to_instance_with_version(db, self.python_version())
+                                })
                         }
                     }),
 
@@ -799,7 +812,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 .filter(|&m| m <= headroom)
                                 .and_then(|m| n.checked_shl(m))
                                 .map(Type::int_literal)
-                                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+                                .unwrap_or_else(|| {
+                                    KnownClass::Int
+                                        .to_instance_with_version(db, self.python_version())
+                                }),
                         )
                     }
 
@@ -814,7 +830,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             Err(_) if m.as_i64() > 0 => {
                                 Type::int_literal(if n >= 0 { 0 } else { -1 })
                             }
-                            Err(_) => KnownClass::Int.to_instance(db),
+                            Err(_) => {
+                                KnownClass::Int.to_instance_with_version(db, self.python_version())
+                            }
                         };
                         Some(result)
                     }

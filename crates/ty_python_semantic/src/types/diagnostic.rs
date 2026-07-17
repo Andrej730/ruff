@@ -1856,7 +1856,7 @@ pub(super) fn report_invalid_generator_function_return_type(
     };
 
     let mut diag = builder.into_diagnostic("Return type does not match returned value");
-    let inferred_ty = inferred_return.display(context.db());
+    let inferred_ty = inferred_return.display(context.python_version());
     diag.set_primary_message(format_args!(
         "expected `{expected_ty}`, found `{inferred_ty}`",
         expected_ty = expected_ty.display(context.db()),
@@ -2979,7 +2979,7 @@ pub(crate) fn report_invalid_or_unsupported_base(
     class: StaticClassLiteral,
 ) {
     let db = context.db();
-    let instance_of_type = KnownClass::Type.to_instance(db);
+    let instance_of_type = KnownClass::Type.to_instance_with_version(db, context.python_version());
 
     if base_type.is_assignable_to(db, instance_of_type) {
         report_unsupported_base(context, base_node, base_type, class);

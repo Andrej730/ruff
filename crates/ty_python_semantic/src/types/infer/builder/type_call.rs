@@ -175,8 +175,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         if !matches!(namespace_type, Type::TypedDict(_))
             && !namespace_type.is_assignable_to(
                 db,
-                KnownClass::Dict
-                    .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), Type::any()]),
+                KnownClass::Dict.to_specialized_instance_with_version(
+                    db,
+                    self.python_version(),
+                    &[
+                        KnownClass::Str.to_instance_with_version(db, self.python_version()),
+                        Type::any(),
+                    ],
+                ),
             )
             && let Some(builder) = self
                 .context
@@ -194,8 +200,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let name = if let Some(literal) = name_type.as_string_literal() {
             literal.value(db)
         } else {
-            if !name_type.is_assignable_to(db, KnownClass::Str.to_instance(db))
-                && let Some(builder) = self.context.report_lint(&INVALID_ARGUMENT_TYPE, name_arg)
+            if !name_type.is_assignable_to(
+                db,
+                KnownClass::Str.to_instance_with_version(db, self.python_version()),
+            ) && let Some(builder) = self.context.report_lint(&INVALID_ARGUMENT_TYPE, name_arg)
             {
                 let mut diagnostic =
                     builder.into_diagnostic("Invalid argument to parameter 1 (`name`) of `type()`");

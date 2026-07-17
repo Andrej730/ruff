@@ -513,9 +513,14 @@ pub(crate) fn global_symbol<'db>(
 pub(crate) fn imported_symbol<'db>(
     db: &'db dyn Db,
     file: Option<PythonFile<'db>>,
+    python_version: PythonVersion,
     name: &str,
     requires_explicit_reexport: Option<RequiresExplicitReExport>,
 ) -> PlaceAndQualifiers<'db> {
+    if let Some(file) = file {
+        debug_assert_eq!(file.python_version(db), python_version);
+    }
+
     // If it's not found in the global scope, check if it's present as an instance on
     // `types.ModuleType` or `builtins.object`.
     //
@@ -564,7 +569,8 @@ pub(crate) fn imported_symbol<'db>(
                 // do not attempt to detect this; we just infer `str` still. This matches the
                 // behaviour of other major type checkers.
                 if file.is_some() {
-                    Place::bound(KnownClass::Str.to_instance(db)).into()
+                    Place::bound(KnownClass::Str.to_instance_with_version(db, python_version))
+                        .into()
                 } else {
                     Place::bound(Type::none(db)).into()
                 }
@@ -572,7 +578,7 @@ pub(crate) fn imported_symbol<'db>(
             "__getattr__" => Place::Undefined.into(),
             "__builtins__" => Place::bound(Type::any()).into(),
             _ => KnownClass::ModuleType
-                .to_instance(db)
+                .to_instance_with_version(db, python_version)
                 .member_lookup_with_policy(db, name, MemberLookupPolicy::NO_GETATTR_LOOKUP),
         }
     })
@@ -635,7 +641,13 @@ pub(crate) fn known_module_symbol<'db>(
     resolve_module_confident(db, python_version, &known_module.name())
         .and_then(|module| {
             let file = module.python_file(db)?;
-            Some(imported_symbol(db, Some(file), symbol, None))
+            Some(imported_symbol(
+                db,
+                Some(file),
+                python_version,
+                symbol,
+                None,
+            ))
         })
         .unwrap_or_default()
 }
@@ -2084,7 +2096,10 @@ pub(crate) mod implicit_globals {
             // We special-case `__file__` here because we know that for an internal implicit global
             // lookup in a Python module, it is always a string, even though typeshed says `str |
             // None`.
-            "__file__" => Place::bound(KnownClass::Str.to_instance(db)).into(),
+            "__file__" => {
+                Place::bound(KnownClass::Str.to_instance_with_version(db, file.python_version(db)))
+                    .into()
+            }
 
             // We special-case `__doc__` because a module with a literal docstring has `__doc__`
             // set to that string at runtime. We only narrow when a docstring is present: `__doc__`
@@ -2093,20 +2108,29 @@ pub(crate) mod implicit_globals {
                 // Docstrings are stripped in `-OO` optimized mode, but here we assume that the
                 // existence of an actual docstring AND the usage of `__doc__` is reason enough to
                 // believe that it will exist at runtime.
-                Place::bound(KnownClass::Str.to_instance(db)).into()
+                Place::bound(KnownClass::Str.to_instance_with_version(db, file.python_version(db)))
+                    .into()
             }
 
             "__builtins__" => Place::bound(Type::any()).into(),
 
-            "__debug__" => Place::bound(KnownClass::Bool.to_instance(db)).into(),
+            "__debug__" => {
+                Place::bound(KnownClass::Bool.to_instance_with_version(db, file.python_version(db)))
+                    .into()
+            }
 
             // Created lazily by the warnings machinery; may be absent.
             // Model as possibly-unbound to avoid false negatives.
             "__warningregistry__" => {
+                let python_version = file.python_version(db);
                 Place::Defined(
-                    DefinedPlace::new(KnownClass::Dict.to_specialized_instance(
+                    DefinedPlace::new(KnownClass::Dict.to_specialized_instance_with_version(
                         db,
-                        &[Type::any(), KnownClass::Int.to_instance(db)],
+                        python_version,
+                        &[
+                            Type::any(),
+                            KnownClass::Int.to_instance_with_version(db, python_version),
+                        ],
                     ))
                     .with_definedness(Definedness::PossiblyUndefined),
                 )
@@ -2116,14 +2140,21 @@ pub(crate) mod implicit_globals {
             // Marked as possibly-unbound as it is only present in the module namespace
             // if at least one global symbol is annotated in the module.
             "__annotate__" if file.python_version(db) >= PythonVersion::PY314 => {
+                let python_version = file.python_version(db);
                 let signature = Signature::new(
                     Parameters::standard([Parameter::positional_only(Some(Name::new_static(
                         "format",
                     )))
-                    .with_annotated_type(KnownClass::Int.to_instance(db))]),
-                    KnownClass::Dict.to_specialized_instance(
+                    .with_annotated_type(
+                        KnownClass::Int.to_instance_with_version(db, python_version),
+                    )]),
+                    KnownClass::Dict.to_specialized_instance_with_version(
                         db,
-                        &[KnownClass::Str.to_instance(db), Type::any()],
+                        python_version,
+                        &[
+                            KnownClass::Str.to_instance_with_version(db, python_version),
+                            Type::any(),
+                        ],
                     ),
                 );
                 Place::Defined(
@@ -2143,7 +2174,7 @@ pub(crate) mod implicit_globals {
                 .any(|module_type_member| &**module_type_member == name) =>
             {
                 KnownClass::ModuleType
-                    .to_instance(db)
+                    .to_instance_with_version(db, file.python_version(db))
                     .member_lookup_with_policy(db, name, MemberLookupPolicy::NO_GETATTR_LOOKUP)
             }
 
@@ -2262,18 +2293,22 @@ pub(crate) fn class_body_implicit_symbol<'db>(
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
     match name {
-        "__qualname__" => Place::bound(KnownClass::Str.to_instance(db)).into(),
-        "__module__" => Place::bound(KnownClass::Str.to_instance(db)).into(),
+        "__qualname__" => {
+            Place::bound(KnownClass::Str.to_instance_with_version(db, python_version)).into()
+        }
+        "__module__" => {
+            Place::bound(KnownClass::Str.to_instance_with_version(db, python_version)).into()
+        }
         // __doc__ is `str` if there's a docstring, `None` if there isn't
         "__doc__" => Place::bound(UnionType::from_two_elements(
             db,
-            KnownClass::Str.to_instance(db),
+            KnownClass::Str.to_instance_with_version(db, python_version),
             Type::none(db),
         ))
         .into(),
         // __firstlineno__ was added in Python 3.13
         "__firstlineno__" if python_version >= PythonVersion::PY313 => {
-            Place::bound(KnownClass::Int.to_instance(db)).into()
+            Place::bound(KnownClass::Int.to_instance_with_version(db, python_version)).into()
         }
         _ => Place::Undefined.into(),
     }

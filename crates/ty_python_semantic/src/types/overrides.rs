@@ -610,7 +610,7 @@ fn check_class_declaration<'db>(
     if !subclass_overrides_superclass_declaration && !has_dynamic_superclass {
         if has_typeddict_in_mro {
             if !KnownClass::TypedDictFallback
-                .to_instance(db)
+                .to_instance_with_version(db, context.python_version())
                 .member(db, &member.name)
                 .place
                 .is_undefined()
@@ -619,7 +619,7 @@ fn check_class_declaration<'db>(
             }
         } else if class_kind == Some(CodeGeneratorKind::NamedTuple) {
             if !KnownClass::NamedTupleFallback
-                .to_instance(db)
+                .to_instance_with_version(db, context.python_version())
                 .member(db, &member.name)
                 .place
                 .is_undefined()

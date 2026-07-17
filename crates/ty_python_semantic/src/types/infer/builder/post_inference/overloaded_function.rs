@@ -142,11 +142,12 @@ pub(crate) fn check_overloaded_function<'db>(
             )
         {
             if class.is_protocol(db)
-                || (Type::ClassLiteral(class)
-                    .is_subtype_of(db, KnownClass::ABCMeta.to_instance(db))
-                    && overloads.iter().all(|overload| {
-                        overload.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
-                    }))
+                || (Type::ClassLiteral(class).is_subtype_of(
+                    db,
+                    KnownClass::ABCMeta.to_instance_with_version(db, context.python_version()),
+                ) && overloads.iter().all(|overload| {
+                    overload.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
+                }))
             {
                 implementation_required = false;
             }

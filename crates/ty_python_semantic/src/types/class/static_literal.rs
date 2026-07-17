@@ -1012,7 +1012,13 @@ impl<'db> StaticClassLiteral<'db> {
                     .unwrap_or(class);
                 (base_class.metaclass(db), base_class_literal)
             } else {
-                (KnownClass::Type.to_class_literal(db), class)
+                (
+                    KnownClass::Type.to_class_literal_with_version(
+                        db,
+                        class.python_file(db).python_version(db),
+                    ),
+                    class,
+                )
             };
 
             let mut candidate = if let Some(metaclass_ty) = metaclass.to_class_type(db) {
@@ -1021,10 +1027,17 @@ impl<'db> StaticClassLiteral<'db> {
                     explicit_metaclass_of: class_metaclass_was_from,
                 }
             } else {
+                let python_version = class.python_file(db).python_version(db);
                 let name = Type::string_literal(db, class.name(db));
                 let bases = Type::heterogeneous_tuple(db, class.explicit_bases(db));
-                let namespace = KnownClass::Dict
-                    .to_specialized_instance(db, &[KnownClass::Str.to_instance(db), Type::any()]);
+                let namespace = KnownClass::Dict.to_specialized_instance_with_version(
+                    db,
+                    python_version,
+                    &[
+                        KnownClass::Str.to_instance_with_version(db, python_version),
+                        Type::any(),
+                    ],
+                );
 
                 // TODO: Other keyword arguments?
                 let arguments = CallArguments::positional([name, bases, namespace]);
@@ -1102,7 +1115,11 @@ impl<'db> StaticClassLiteral<'db> {
         }
 
         if !self.has_explicit_bases(db) && !self.has_explicit_metaclass(db) {
-            return Ok((KnownClass::Type.to_class_literal(db), None));
+            return Ok((
+                KnownClass::Type
+                    .to_class_literal_with_version(db, self.python_file(db).python_version(db)),
+                None,
+            ));
         }
         try_metaclass_inner(db, self)
     }
@@ -1214,12 +1231,18 @@ impl<'db> StaticClassLiteral<'db> {
         {
             if name == "__dataclass_fields__" {
                 // Make this class look like a subclass of the `DataClassInstance` protocol
+                let python_version = self.python_file(db).python_version(db);
                 return Member {
-                    inner: Place::declared(KnownClass::Dict.to_specialized_instance(
+                    inner: Place::declared(KnownClass::Dict.to_specialized_instance_with_version(
                         db,
+                        python_version,
                         &[
-                            KnownClass::Str.to_instance(db),
-                            KnownClass::Field.to_specialized_instance(db, &[Type::any()]),
+                            KnownClass::Str.to_instance_with_version(db, python_version),
+                            KnownClass::Field.to_specialized_instance_with_version(
+                                db,
+                                python_version,
+                                &[Type::any()],
+                            ),
                         ],
                     ))
                     .with_qualifiers(TypeQualifiers::CLASS_VAR),
@@ -1354,7 +1377,8 @@ impl<'db> StaticClassLiteral<'db> {
             && let Some(root_method_ty) = self.total_ordering_root_method(db, specialization)
             && let Some(callables) = root_method_ty.try_upcast_to_callable(db)
         {
-            let bool_ty = KnownClass::Bool.to_instance(db);
+            let bool_ty = KnownClass::Bool
+                .to_instance_with_version(db, self.python_file(db).python_version(db));
             let synthesized_callables = callables.map(|callable| {
                 let signatures = CallableSignature::from_overloads(
                     callable.signatures(db).iter().map(|signature| {
@@ -1636,7 +1660,7 @@ impl<'db> StaticClassLiteral<'db> {
                 // When the namedtuple base has unknown fields, fall back to NamedTupleFallback
                 // which has generic signatures that accept any arguments.
                 KnownClass::NamedTupleFallback
-                    .to_class_literal(db)
+                    .to_class_literal_with_version(db, self.python_file(db).python_version(db))
                     .as_class_literal()?
                     .as_static()?
                     .own_class_member(db, inherited_generic_context, None, name)
@@ -1694,7 +1718,8 @@ impl<'db> StaticClassLiteral<'db> {
                             // TODO: could be `Self`.
                             .with_annotated_type(instance_ty),
                     ]),
-                    KnownClass::Bool.to_instance(db),
+                    KnownClass::Bool
+                        .to_instance_with_version(db, self.python_file(db).python_version(db)),
                 );
 
                 Some(Type::function_like_callable(db, signature))
@@ -1711,7 +1736,8 @@ impl<'db> StaticClassLiteral<'db> {
                             "self",
                         ))
                         .with_annotated_type(instance_ty)]),
-                        KnownClass::Int.to_instance(db),
+                        KnownClass::Int
+                            .to_instance_with_version(db, self.python_file(db).python_version(db)),
                     );
 
                     Some(Type::function_like_callable(db, signature))
@@ -1764,7 +1790,7 @@ impl<'db> StaticClassLiteral<'db> {
             }
             (CodeGeneratorKind::NamedTuple, name) if name != "__init__" => {
                 KnownClass::NamedTupleFallback
-                    .to_class_literal(db)
+                    .to_class_literal_with_version(db, self.python_file(db).python_version(db))
                     .as_class_literal()?
                     .as_static()?
                     .own_class_member(db, self.inherited_generic_context(db), None, name)
@@ -1875,7 +1901,8 @@ impl<'db> StaticClassLiteral<'db> {
             .keys()
             .map(|field| setattr_signature(Type::string_literal(db, field), Type::Never))
             .chain([setattr_signature(
-                KnownClass::Str.to_instance(db),
+                KnownClass::Str
+                    .to_instance_with_version(db, self.python_file(db).python_version(db)),
                 Type::none(db),
             )]);
 
@@ -2350,7 +2377,7 @@ impl<'db> StaticClassLiteral<'db> {
         match MroLookup::new(db, self.iter_mro(db, specialization)).instance_member(name) {
             InstanceMemberResult::Done(result) => result,
             InstanceMemberResult::TypedDict => KnownClass::TypedDictFallback
-                .to_instance(db)
+                .to_instance_with_version(db, self.python_file(db).python_version(db))
                 .instance_member(db, name)
                 .map_type(|ty| {
                     ty.apply_type_mapping(

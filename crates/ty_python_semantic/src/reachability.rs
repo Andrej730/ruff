@@ -1368,6 +1368,7 @@ fn analyze_single(db: &dyn Db, predicate: &Predicate) -> Truthiness {
             match imported_symbol(
                 db,
                 Some(python_file),
+                python_file.python_version(db),
                 symbol.name(),
                 requires_explicit_reexport,
             )

@@ -146,7 +146,7 @@ impl<'db> CodeGeneratorKind<'db> {
                     info.params,
                 ))
             } else if KnownClass::Type
-                .try_to_class_literal(db)
+                .try_to_class_literal_with_version(db, class.python_file(db).python_version(db))
                 .is_none_or(|type_class| {
                     !class.is_subclass_of(
                         db,
@@ -609,7 +609,13 @@ impl<'db> ClassLiteral<'db> {
                 match result {
                     ClassMemberResult::Done(result) => result.finalize(db),
                     ClassMemberResult::TypedDict(module) => {
-                        typed_dict::typed_dict_fallback_class_member(db, module, policy, name)
+                        typed_dict::typed_dict_fallback_class_member(
+                            db,
+                            self.python_file(db).python_version(db),
+                            module,
+                            policy,
+                            name,
+                        )
                     }
                 }
             }
@@ -1594,7 +1600,10 @@ impl<'db> ClassType<'db> {
         // however, since we end up with infinite recursion in that case due to the fact
         // that `type` is its own metaclass (and we know that `type` can coexist in an MRO
         // with any other arbitrary class, anyway).
-        let type_class = KnownClass::Type.to_class_literal(db);
+        let type_class = KnownClass::Type.to_class_literal_with_version(
+            db,
+            self.class_literal(db).python_file(db).python_version(db),
+        );
         let self_metaclass = self.metaclass(db);
         if self_metaclass == type_class {
             return true;
@@ -1706,7 +1715,12 @@ impl<'db> ClassType<'db> {
                     .and_then(|tuple| tuple.len().into_fixed_length())
                     .and_then(|len| i64::try_from(len).ok())
                     .map(Type::int_literal)
-                    .unwrap_or_else(|| KnownClass::Int.to_instance(db));
+                    .unwrap_or_else(|| {
+                        KnownClass::Int.to_instance_with_version(
+                            db,
+                            class_literal.python_file(db).python_version(db),
+                        )
+                    });
 
                 let parameters = Parameters::standard([Parameter::positional_only(Some(
                     Name::new_static("self"),
@@ -1864,17 +1878,27 @@ impl<'db> ClassType<'db> {
                         //    __getitem__(self, index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[str | float | bytes, ...]
                         //
                         overload_signatures.push(synthesize_getitem_overload_signature(
-                            KnownClass::SupportsIndex.to_instance(db),
+                            KnownClass::SupportsIndex.to_instance_with_version(
+                                db,
+                                class_literal.python_file(db).python_version(db),
+                            ),
                             all_elements_unioned,
                         ));
 
                         let slice_bound = UnionType::from_elements(
                             db,
-                            [KnownClass::SupportsIndex.to_instance(db), Type::none(db)],
+                            [
+                                KnownClass::SupportsIndex.to_instance_with_version(
+                                    db,
+                                    class_literal.python_file(db).python_version(db),
+                                ),
+                                Type::none(db),
+                            ],
                         );
                         overload_signatures.push(synthesize_getitem_overload_signature(
-                            KnownClass::Slice.to_specialized_instance(
+                            KnownClass::Slice.to_specialized_instance_with_version(
                                 db,
+                                class_literal.python_file(db).python_version(db),
                                 &[slice_bound, slice_bound, slice_bound],
                             ),
                             Type::homogeneous_tuple(db, all_elements_unioned),
@@ -1921,8 +1945,9 @@ impl<'db> ClassType<'db> {
                                 "Tuple specialization should have exactly one element when it has no length restriction"
                             );
                             iterable_parameter = iterable_parameter.with_annotated_type(
-                                KnownClass::Iterable.to_specialized_instance(
+                                KnownClass::Iterable.to_specialized_instance_with_version(
                                     db,
+                                    class_literal.python_file(db).python_version(db),
                                     &[tuple.homogeneous_element_type(db)],
                                 ),
                             );
@@ -1936,8 +1961,12 @@ impl<'db> ClassType<'db> {
                     }
                     None => {
                         // If the tuple isn't specialized at all, we allow any argument as long as it is iterable.
-                        iterable_parameter = iterable_parameter
-                            .with_annotated_type(KnownClass::Iterable.to_instance(db));
+                        iterable_parameter = iterable_parameter.with_annotated_type(
+                            KnownClass::Iterable.to_instance_with_version(
+                                db,
+                                class_literal.python_file(db).python_version(db),
+                            ),
+                        );
                     }
                 }
 

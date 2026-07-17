@@ -295,7 +295,10 @@ impl<'db> DynamicClassLiteral<'db> {
         // To dynamically create a class with no bases that has a custom metaclass,
         // you have to invoke that metaclass rather than `type()`.
         if original_bases.is_empty() {
-            return Ok(KnownClass::Type.to_class_literal(db));
+            return Ok(KnownClass::Type.to_class_literal_with_version(
+                db,
+                self.scope(db).python_file(db).python_version(db),
+            ));
         }
 
         // If there's an MRO error, return unknown to avoid cascading errors.
@@ -313,7 +316,10 @@ impl<'db> DynamicClassLiteral<'db> {
 
         // If all bases failed to convert, return type as the metaclass.
         if bases.is_empty() {
-            return Ok(KnownClass::Type.to_class_literal(db));
+            return Ok(KnownClass::Type.to_class_literal_with_version(
+                db,
+                self.scope(db).python_file(db).python_version(db),
+            ));
         }
 
         // Start with the first base's metaclass as the candidate.
@@ -378,7 +384,7 @@ impl<'db> DynamicClassLiteral<'db> {
             InstanceMemberResult::TypedDict => {
                 // Simplified `TypedDict` handling without type mapping.
                 KnownClass::TypedDictFallback
-                    .to_instance(db)
+                    .to_instance_with_version(db, self.scope(db).python_file(db).python_version(db))
                     .instance_member(db, name)
             }
         }
@@ -401,11 +407,17 @@ impl<'db> DynamicClassLiteral<'db> {
         {
             if name == "__dataclass_fields__" {
                 // Make this class look like a subclass of the `DataClassInstance` protocol.
-                return Place::declared(KnownClass::Dict.to_specialized_instance(
+                let python_version = self.scope(db).python_file(db).python_version(db);
+                return Place::declared(KnownClass::Dict.to_specialized_instance_with_version(
                     db,
+                    python_version,
                     &[
-                        KnownClass::Str.to_instance(db),
-                        KnownClass::Field.to_specialized_instance(db, &[Type::any()]),
+                        KnownClass::Str.to_instance_with_version(db, python_version),
+                        KnownClass::Field.to_specialized_instance_with_version(
+                            db,
+                            python_version,
+                            &[Type::any()],
+                        ),
                     ],
                 ))
                 .with_qualifiers(TypeQualifiers::CLASS_VAR);
@@ -422,9 +434,13 @@ impl<'db> DynamicClassLiteral<'db> {
 
         match result {
             ClassMemberResult::Done(result) => result.finalize(db),
-            ClassMemberResult::TypedDict(module) => {
-                typed_dict_fallback_class_member(db, module, policy, name)
-            }
+            ClassMemberResult::TypedDict(module) => typed_dict_fallback_class_member(
+                db,
+                self.scope(db).python_file(db).python_version(db),
+                module,
+                policy,
+                name,
+            ),
         }
     }
 

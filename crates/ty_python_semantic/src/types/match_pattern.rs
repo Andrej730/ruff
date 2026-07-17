@@ -45,8 +45,14 @@ pub(crate) fn callable_pattern_type(db: &dyn Db) -> Type<'_> {
 /// `TypedDict` is not a nominal subtype of `dict` in the static type system, but every runtime
 /// value is a dictionary. A `TypedDict` therefore matches class patterns such as `dict()`,
 /// `Mapping()`, and `MutableMapping()`.
-pub(crate) fn typed_dict_matches_class_pattern(db: &dyn Db, class: ClassLiteral<'_>) -> bool {
-    let Some(dict) = KnownClass::Dict.to_class_literal(db).as_class_literal() else {
+pub(crate) fn typed_dict_matches_class_pattern<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+) -> bool {
+    let Some(dict) = KnownClass::Dict
+        .to_class_literal_with_version(db, class.python_file(db).python_version(db))
+        .as_class_literal()
+    else {
         return false;
     };
     Type::instance(db, dict.top_materialization(db))

@@ -4257,8 +4257,15 @@ impl<'db> Type<'db> {
                         ) =>
                 {
                     let enum_class = enum_literal.enum_class_literal(db);
+                    let python_version = enum_class
+                        .class_literal(db)
+                        .python_file(db)
+                        .python_version(db);
                     let is_enum_subclass = Type::ClassLiteral(enum_class.class_literal(db))
-                        .is_subtype_of(db, KnownClass::Enum.to_subclass_of(db));
+                        .is_subtype_of(
+                            db,
+                            KnownClass::Enum.to_subclass_of_with_version(db, python_version),
+                        );
 
                     (match name_str {
                         "name" if is_enum_subclass => {
@@ -4318,8 +4325,11 @@ impl<'db> Type<'db> {
                         ) =>
                 {
                     let class_literal = instance.class_literal(db);
-                    let is_enum_subclass = Type::ClassLiteral(class_literal)
-                        .is_subtype_of(db, KnownClass::Enum.to_subclass_of(db));
+                    let python_version = class_literal.python_file(db).python_version(db);
+                    let is_enum_subclass = Type::ClassLiteral(class_literal).is_subtype_of(
+                        db,
+                        KnownClass::Enum.to_subclass_of_with_version(db, python_version),
+                    );
 
                     enum_metadata(db, class_literal)
                         .and_then(|metadata| match name_str {
@@ -4758,7 +4768,9 @@ impl<'db> Type<'db> {
                     let python_version = function_type.python_file(db).python_version(db);
                     let bool_parameter = |name: &'static str, default: bool| {
                         Parameter::keyword_only(Name::new_static(name))
-                            .with_annotated_type(KnownClass::Bool.to_instance(db))
+                            .with_annotated_type(
+                                KnownClass::Bool.to_instance_with_version(db, python_version),
+                            )
                             .with_default_type(Type::bool_literal(default))
                     };
 
@@ -4805,7 +4817,7 @@ impl<'db> Type<'db> {
                             // def dataclass(cls: type[_T], /, *, ...) -> type[_T]: ...
                             Signature::new(
                                 Parameters::standard(parameters_with_cls(
-                                    KnownClass::Type.to_instance(db),
+                                    KnownClass::Type.to_instance_with_version(db, python_version),
                                 )),
                                 Type::unknown(),
                             ),
@@ -5412,7 +5424,10 @@ impl<'db> Type<'db> {
         // functional syntax for creating enum classes. TODO we should ideally check e.g.
         // `MyEnum(1)` to make sure `1` is a valid value for `MyEnum`.
         if KnownClass::Enum
-            .to_class_literal(db)
+            .to_class_literal_with_version(
+                db,
+                class.class_literal(db).python_file(db).python_version(db),
+            )
             .to_class_type(db)
             .is_some_and(|enum_class| class.is_subclass_of(db, enum_class))
         {
@@ -8763,7 +8778,13 @@ impl<'db> ModuleLiteralType<'db> {
         // For module literals, we want to try calling the module's own `__getattr__` function
         // if it exists. First, we need to look up the `__getattr__` function in the module's scope.
         if let Some(file) = self.module(db).python_file(db) {
-            let getattr_symbol = imported_symbol(db, Some(file), "__getattr__", None);
+            let getattr_symbol = imported_symbol(
+                db,
+                Some(file),
+                self.module(db).python_version(db),
+                "__getattr__",
+                None,
+            );
             // If we found a __getattr__ function, try to call it with the name argument
             if let Place::Defined(place) = getattr_symbol.place
                 && let Ok(outcome) = place.ty.try_call(
@@ -8791,7 +8812,7 @@ impl<'db> ModuleLiteralType<'db> {
         // never in the global scope of the module.
         if name == "__dict__" {
             return KnownClass::ModuleType
-                .to_instance(db)
+                .to_instance_with_version(db, self.module(db).python_version(db))
                 .member(db, "__dict__");
         }
 
@@ -8810,7 +8831,14 @@ impl<'db> ModuleLiteralType<'db> {
             return Place::bound(submodule).into();
         }
 
-        let place_and_qualifiers = imported_symbol(db, self.module(db).python_file(db), name, None);
+        let module = self.module(db);
+        let place_and_qualifiers = imported_symbol(
+            db,
+            module.python_file(db),
+            module.python_version(db),
+            name,
+            None,
+        );
 
         // If the normal lookup failed, try to call the module's `__getattr__` function
         if place_and_qualifiers.place.is_undefined() {
