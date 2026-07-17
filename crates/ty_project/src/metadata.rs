@@ -45,10 +45,15 @@ pub struct ProjectMetadata {
     /// the file specified by [`Self::config_file_override`] if it is `Some` (e.g. when using `--config-file <path>`).
     pub(super) options: Options,
 
+    /// Options derived from the uv workspace, with lower precedence than project configuration
+    /// but higher precedence than user-level configuration.
+    #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
+    uv_workspace_options: Option<Box<Options>>,
+
     /// The user-level configuration path and its options.
     ///
-    /// Its options have lower precedence than [`Self::override_options`] and [`Self::options`],
-    /// but higher precedence than [`Self::fallback_options`].
+    /// Its options have lower precedence than [`Self::override_options`], [`Self::options`], and
+    /// [`Self::uv_workspace_options`], but higher precedence than [`Self::fallback_options`].
     #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
     user_configuration: Option<Box<(SystemPathBuf, Options)>>,
 
@@ -74,6 +79,7 @@ impl ProjectMetadata {
             name: ProjectName::new(name),
             root,
             options: Options::default(),
+            uv_workspace_options: None,
             override_options: None,
             user_configuration: None,
             fallback_options: None,
@@ -102,6 +108,7 @@ impl ProjectMetadata {
             name: ProjectName::new(root.file_name().unwrap_or("root")),
             root: root.to_path_buf(),
             options,
+            uv_workspace_options: None,
             override_options: None,
             user_configuration: None,
             fallback_options: None,
@@ -161,6 +168,7 @@ impl ProjectMetadata {
             name,
             root,
             options,
+            uv_workspace_options: None,
             override_options: None,
             user_configuration: None,
             fallback_options: None,
@@ -375,21 +383,11 @@ impl ProjectMetadata {
 
     /// Returns configuration paths outside normal project discovery that should be watched.
     pub fn extra_configuration_paths(&self) -> impl Iterator<Item = &SystemPath> {
-        self.config_file_override()
-            .into_iter()
-            .chain(
-                self.user_configuration
-                    .as_deref()
-                    .map(|(path, _)| path.as_path()),
-            )
-            .chain(
-                self.uv_workspace
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(uv::UvWorkspace::configuration_paths)
-                    .filter(|path| !path.starts_with(&self.root))
-                    .map(SystemPathBuf::as_path),
-            )
+        self.config_file_override().into_iter().chain(
+            self.user_configuration
+                .as_deref()
+                .map(|(path, _)| path.as_path()),
+        )
     }
 
     pub(crate) fn try_add_project_root(&self, db: &dyn Db) {
@@ -432,7 +430,7 @@ impl ProjectMetadata {
 
     /// Returns the project's option layers from highest to lowest precedence.
     ///
-    /// `options` is used as the raw base layer between the override and user-level options.
+    /// `options` is used as the raw base layer between the override and uv workspace options.
     /// Layers can be merged by passing them to [`Options::combine_with`] in iterator order:
     ///
     /// ```ignore
@@ -449,6 +447,7 @@ impl ProjectMetadata {
             .as_deref()
             .into_iter()
             .chain(std::iter::once(options))
+            .chain(self.uv_workspace_options.as_deref())
             .chain(
                 self.user_configuration
                     .as_deref()
@@ -461,6 +460,7 @@ impl ProjectMetadata {
     ///
     /// This includes:
     ///
+    /// * The uv workspace configuration
     /// * The user-level configuration
     pub fn apply_configuration_files(
         &mut self,
@@ -476,18 +476,18 @@ impl ProjectMetadata {
             self.user_configuration = Some(Box::new((user.path().to_owned(), user.into_options())));
         }
 
-        if let Some(uv_workspace) = &self.uv_workspace {
-            self.apply_fallback_options(Options {
+        self.uv_workspace_options = self.uv_workspace.as_ref().map(|uv_workspace| {
+            Box::new(Options {
                 environment: Some(EnvironmentOptions {
                     python_version: uv_workspace.requires_python().cloned(),
                     python: uv_workspace
                         .environment()
-                        .map(|path| RelativePathBuf::cli(path.to_path_buf())),
+                        .map(|path| RelativePathBuf::new(path, ValueSource::UvWorkspace)),
                     ..EnvironmentOptions::default()
                 }),
                 ..Options::default()
-            });
-        }
+            })
+        });
 
         Ok(())
     }
@@ -597,6 +597,7 @@ mod tests {
     use ruff_db::system::{SystemPathBuf, TestSystem};
     use ruff_python_ast::PythonVersion;
     use ruff_ranged_value::ValueSource;
+    use ty_static::EnvVars;
 
     use crate::metadata::{Options, uv::UvWorkspace, value::RelativePathBuf};
     use crate::{ProjectMetadata, ProjectMetadataError};
@@ -880,6 +881,25 @@ unclosed table, expected `]`
     }
 
     #[test]
+    fn uv_workspace_discovery_is_system_independent() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let root = SystemPathBuf::from("/app");
+        let member = root.join("packages/member");
+
+        system.set_env_var(EnvVars::TY_UV, "1");
+        system.set_env_var(EnvVars::UV, "uv");
+        system
+            .memory_file_system()
+            .write_file_all(member.join("pyproject.toml"), "[project]\nname = 'member'")?;
+
+        let project = ProjectMetadata::discover(&member, &system)?;
+
+        assert_eq!(project.root(), &*member);
+
+        Ok(())
+    }
+
+    #[test]
     fn member_ty_configuration_precedes_uv_workspace() -> anyhow::Result<()> {
         let system = TestSystem::default();
         let root = SystemPathBuf::from("/app");
@@ -905,13 +925,6 @@ unclosed table, expected `]`
         project.apply_configuration_files(&system)?;
 
         assert_eq!(project.root(), &*member);
-        assert_eq!(
-            project
-                .extra_configuration_paths()
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
-            [root.join("uv.toml")]
-        );
         assert_eq!(
             project
                 .to_merged_options()
@@ -1016,6 +1029,18 @@ unclosed table, expected `]`
                 .map(RelativePathBuf::path),
             Some(environment.as_path())
         );
+        assert!(matches!(
+            project_environment
+                .and_then(|environment| environment.python.as_ref())
+                .map(RelativePathBuf::source),
+            Some(ValueSource::UvWorkspace)
+        ));
+        assert!(matches!(
+            project_environment
+                .and_then(|environment| environment.python_version.as_ref())
+                .map(ruff_ranged_value::RangedValue::source),
+            Some(ValueSource::UvWorkspace)
+        ));
 
         let user_config_directory = root.join("config");
         system
@@ -1038,13 +1063,13 @@ unclosed table, expected `]`
                 .and_then(|environment| environment.python_version.as_deref())
                 .copied()
                 .map(PythonVersion::from),
-            Some(PythonVersion::PY312)
+            Some(PythonVersion::PY311)
         );
         assert_eq!(
             project_environment
                 .and_then(|environment| environment.python.as_ref())
                 .map(|python| python.path().as_str()),
-            Some("/user-venv")
+            Some(environment.as_str())
         );
 
         Ok(())

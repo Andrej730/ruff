@@ -112,6 +112,35 @@ fn explicit_paths_filter_promoted_workspace() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-uv")]
+#[test]
+fn nested_ty_configuration_does_not_check_parent_workspace_member() -> anyhow::Result<()> {
+    let case = workspace_case()?;
+    case.write_file("packages/member/member.py", "value: int = 'wrong'")?;
+    case.write_file(
+        "packages/member/sub/ty.toml",
+        r#"
+[environment]
+python-version = "3.8"
+"#,
+    )?;
+    case.write_file("packages/member/sub/inside.py", "value: int = 1")?;
+
+    let mut command = command_with_uv(&case);
+    command.current_dir(case.root().join("packages/member/sub"));
+
+    assert_cmd_snapshot!(command, @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn explicit_project_disables_uv_workspace_discovery() -> anyhow::Result<()> {
     let case = workspace_case()?;
@@ -190,6 +219,31 @@ fn finds_uv_on_path_without_uv_environment_variable() -> anyhow::Result<()> {
 
     ----- stderr -----
     ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-uv")]
+#[test]
+fn reports_uv_workspace_python_version_source() -> anyhow::Result<()> {
+    let case = workspace_case()?;
+    case.write_file("packages/member/member.py", "PythonFinalizationError")?;
+
+    for output_format in ["full", "concise"] {
+        let mut command = command_with_uv(&case);
+        command
+            .current_dir(case.root().join("packages/member"))
+            .arg("--output-format")
+            .arg(output_format);
+
+        let output = command.output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(!output.status.success());
+        assert!(!stdout.contains("specified on the command line"));
+        if output_format == "full" {
+            assert!(stdout.contains("provided by uv workspace metadata"));
+        }
+    }
 
     Ok(())
 }

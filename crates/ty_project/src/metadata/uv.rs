@@ -1,9 +1,8 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use pep440_rs::VersionSpecifiers;
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
-use ruff_ranged_value::RangedValue;
+use ruff_ranged_value::{RangedValue, ValueSource};
 use serde::Deserialize;
 use thiserror::Error;
 use ty_static::EnvVars;
@@ -17,7 +16,6 @@ pub struct UvWorkspace {
     member: Option<SystemPathBuf>,
     environment: Option<SystemPathBuf>,
     requires_python: Option<RangedValue<SupportedPythonVersion>>,
-    configuration_paths: Box<[SystemPathBuf]>,
 }
 
 impl UvWorkspace {
@@ -26,13 +24,7 @@ impl UvWorkspace {
             .env_var(EnvVars::UV)
             .unwrap_or_else(|_| "uv".to_string());
 
-        let output = match Command::new(uv)
-            .arg("workspace")
-            .arg("metadata")
-            .arg("--sync")
-            .current_dir(path.as_std_path())
-            .output()
-        {
+        let output = match system.run_command(&uv, &["workspace", "metadata", "--sync"], path) {
             Ok(output) => output,
             Err(error) => {
                 tracing::debug!("Failed to invoke `uv workspace metadata`: {error}");
@@ -72,9 +64,11 @@ impl UvWorkspace {
             ));
         }
 
-        let requires_python =
-            resolve_requires_python_lower_bound(&RangedValue::cli(metadata.requires_python))
-                .map_err(UvWorkspaceError::InvalidRequiresPython)?;
+        let requires_python = resolve_requires_python_lower_bound(&RangedValue::new(
+            metadata.requires_python,
+            ValueSource::UvWorkspace,
+        ))
+        .map_err(UvWorkspaceError::InvalidRequiresPython)?;
 
         let root = existing_directory(metadata.workspace_root, "workspace root", system)?;
         if !path.starts_with(&root) {
@@ -83,10 +77,6 @@ impl UvWorkspace {
                 path: path.to_path_buf(),
             });
         }
-        let configuration_paths = [root.join("uv.toml"), root.join("pyproject.toml")]
-            .into_iter()
-            .filter(|path| system.is_file(path))
-            .collect();
 
         let environment = metadata
             .environment
@@ -100,7 +90,7 @@ impl UvWorkspace {
             .into_iter()
             .map(|member| member.path)
             .filter(|member| path.as_std_path().starts_with(member))
-            .max_by_key(|member| member.components().count());
+            .max_by_key(|member| member.as_os_str().len());
         let member = match member {
             Some(member) => Some(existing_directory(member, "workspace member", system)?),
             None => None,
@@ -111,7 +101,6 @@ impl UvWorkspace {
             member,
             environment,
             requires_python,
-            configuration_paths,
         })
     }
 
@@ -129,10 +118,6 @@ impl UvWorkspace {
 
     pub fn requires_python(&self) -> Option<&RangedValue<SupportedPythonVersion>> {
         self.requires_python.as_ref()
-    }
-
-    pub(super) fn configuration_paths(&self) -> &[SystemPathBuf] {
-        &self.configuration_paths
     }
 }
 

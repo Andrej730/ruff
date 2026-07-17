@@ -169,6 +169,7 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
         && explicit_project_path.is_none()
         && let Some(workspace_member) = project_metadata.uv_workspace_member()
         && workspace_member != project_metadata.root()
+        && workspace_member.starts_with(project_metadata.root())
     {
         check_paths.push(workspace_member.to_path_buf());
     }

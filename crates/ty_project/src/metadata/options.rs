@@ -190,6 +190,7 @@ impl Options {
                     SysPrefixPathOrigin::ConfigFileSetting(path.clone(), python_path.range())
                 }
                 ValueSource::Editor => SysPrefixPathOrigin::Editor,
+                ValueSource::UvWorkspace => SysPrefixPathOrigin::UvWorkspace,
             };
 
             PythonEnvironment::new(python_path.absolute(project_root, system), origin, system)
@@ -558,6 +559,7 @@ fn python_version_from_config(
                 PythonVersionFileSource::new(path.clone(), ranged_version.range()),
             ),
             ValueSource::Editor => PythonVersionSource::Editor,
+            ValueSource::UvWorkspace => PythonVersionSource::UvWorkspace,
         },
     }
 }
@@ -678,6 +680,10 @@ fn unsupported_inferred_python_version_diagnostic(
         PythonVersionSource::Editor => diagnostic.sub(SubDiagnostic::new(
             SubDiagnosticSeverity::Info,
             "The version was inferred from your editor.",
+        )),
+        PythonVersionSource::UvWorkspace => diagnostic.sub(SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            "The version was provided by uv workspace metadata.",
         )),
         PythonVersionSource::Default => diagnostic.sub(SubDiagnostic::new(
             SubDiagnosticSeverity::Info,
@@ -1094,6 +1100,7 @@ impl Rules {
                 ValueSource::File(_) => LintSource::File,
                 ValueSource::Cli => LintSource::Cli,
                 ValueSource::Editor => LintSource::Editor,
+                ValueSource::UvWorkspace => LintSource::UvWorkspace,
             };
 
             let mut set_lint_level = |lint| {
@@ -2225,6 +2232,10 @@ impl OptionDiagnostic {
             ValueSource::Editor => self.sub(SubDiagnostic::new(
                 SubDiagnosticSeverity::Info,
                 "The {value_label} was specified in the editor settings.",
+            )),
+            ValueSource::UvWorkspace => self.sub(SubDiagnostic::new(
+                SubDiagnosticSeverity::Info,
+                format!("The {value_label} was provided by uv workspace metadata."),
             )),
         }
     }
