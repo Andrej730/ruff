@@ -628,19 +628,16 @@ pub(crate) fn builtins_symbol<'db>(
 /// Returns `Place::Undefined` if the given known module cannot be resolved for some reason.
 pub(crate) fn known_module_symbol<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     known_module: KnownModule,
     symbol: &str,
 ) -> PlaceAndQualifiers<'db> {
-    resolve_module_confident(
-        db,
-        Program::get(db).python_version(db),
-        &known_module.name(),
-    )
-    .and_then(|module| {
-        let file = module.python_file(db)?;
-        Some(imported_symbol(db, Some(file), symbol, None))
-    })
-    .unwrap_or_default()
+    resolve_module_confident(db, python_version, &known_module.name())
+        .and_then(|module| {
+            let file = module.python_file(db)?;
+            Some(imported_symbol(db, Some(file), symbol, None))
+        })
+        .unwrap_or_default()
 }
 
 /// Lookup the type of `symbol` in the `typing` module namespace.
@@ -648,8 +645,12 @@ pub(crate) fn known_module_symbol<'db>(
 /// Returns `Place::Undefined` if the `typing` module isn't available for some reason.
 #[inline]
 #[cfg(test)]
-pub(crate) fn typing_symbol<'db>(db: &'db dyn Db, symbol: &str) -> PlaceAndQualifiers<'db> {
-    known_module_symbol(db, KnownModule::Typing, symbol)
+pub(crate) fn typing_symbol<'db>(
+    db: &'db dyn Db,
+    python_version: PythonVersion,
+    symbol: &str,
+) -> PlaceAndQualifiers<'db> {
+    known_module_symbol(db, python_version, KnownModule::Typing, symbol)
 }
 
 /// Lookup the type of `symbol` in the `typing_extensions` module namespace.
@@ -658,9 +659,10 @@ pub(crate) fn typing_symbol<'db>(db: &'db dyn Db, symbol: &str) -> PlaceAndQuali
 #[inline]
 pub(crate) fn typing_extensions_symbol<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     symbol: &str,
 ) -> PlaceAndQualifiers<'db> {
-    known_module_symbol(db, KnownModule::TypingExtensions, symbol)
+    known_module_symbol(db, python_version, KnownModule::TypingExtensions, symbol)
 }
 
 /// Get the `builtins` module scope.
@@ -2439,13 +2441,19 @@ mod tests {
     #[test]
     fn implicit_typing_globals() {
         let db = setup_db();
-        assert_bound_string_symbol(&db, typing_symbol(&db, "__name__").place);
+        assert_bound_string_symbol(
+            &db,
+            typing_symbol(&db, Program::get(&db).python_version(&db), "__name__").place,
+        );
     }
 
     #[test]
     fn implicit_typing_extensions_globals() {
         let db = setup_db();
-        assert_bound_string_symbol(&db, typing_extensions_symbol(&db, "__name__").place);
+        assert_bound_string_symbol(
+            &db,
+            typing_extensions_symbol(&db, Program::get(&db).python_version(&db), "__name__").place,
+        );
     }
 
     #[test]
@@ -2453,7 +2461,13 @@ mod tests {
         let db = setup_db();
         assert_bound_string_symbol(
             &db,
-            known_module_symbol(&db, KnownModule::Sys, "__name__").place,
+            known_module_symbol(
+                &db,
+                Program::get(&db).python_version(&db),
+                KnownModule::Sys,
+                "__name__",
+            )
+            .place,
         );
     }
 }

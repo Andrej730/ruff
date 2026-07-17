@@ -2745,11 +2745,16 @@ pub(crate) mod tests {
                 continue;
             }
 
-            let function_definition = known_module_symbol(&db, module, function_name)
-                .place
-                .expect_type()
-                .expect_function_literal()
-                .definition(&db);
+            let function_definition = known_module_symbol(
+                &db,
+                crate::Program::get(&db).python_version(&db),
+                module,
+                function_name,
+            )
+            .place
+            .expect_type()
+            .expect_function_literal()
+            .definition(&db);
 
             assert_eq!(
                 KnownFunction::try_from_definition_and_name(

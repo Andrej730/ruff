@@ -3,9 +3,9 @@ use std::borrow::Cow;
 use itertools::Either;
 use ruff_db::diagnostic::Span;
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast as ast;
 use ruff_python_ast::NodeIndex;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, PythonVersion};
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextRange};
 use ty_module_resolver::KnownModule;
@@ -32,6 +32,7 @@ use ty_python_core::scope::ScopeId;
 
 pub(super) fn synthesize_typed_dict_method<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     method_name: &str,
     fields: impl Fn() -> TypedDictFields<'db>,
@@ -66,13 +67,13 @@ pub(super) fn synthesize_typed_dict_method<'db>(
             ))
         }
         "items" if !typed_dict.openness(db).is_implicitly_open() => Some(
-            synthesize_typed_dict_view_method(db, typed_dict, "dict_items"),
+            synthesize_typed_dict_view_method(db, python_version, typed_dict, "dict_items"),
         ),
         "keys" if !typed_dict.openness(db).is_implicitly_open() => Some(
-            synthesize_typed_dict_view_method(db, typed_dict, "dict_keys"),
+            synthesize_typed_dict_view_method(db, python_version, typed_dict, "dict_keys"),
         ),
         "values" if !typed_dict.openness(db).is_implicitly_open() => Some(
-            synthesize_typed_dict_view_method(db, typed_dict, "dict_values"),
+            synthesize_typed_dict_view_method(db, python_version, typed_dict, "dict_values"),
         ),
         "__or__" | "__ror__" | "__ior__" => {
             Some(synthesize_typed_dict_merge(db, instance_ty, method_name))
@@ -663,21 +664,26 @@ fn synthesize_typed_dict_no_argument_method<'db>(
 /// Synthesize `items`, `keys`, or `values` for a closed or extra-items `TypedDict`.
 fn synthesize_typed_dict_view_method<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     typed_dict: TypedDictType<'db>,
     view_name: &str,
 ) -> Type<'db> {
-    let return_ty = known_module_symbol(db, KnownModule::CollectionsAbcInternal, view_name)
-        .place
-        .ignore_possibly_undefined()
-        .and_then(Type::as_class_literal)
-        .map(|class| {
-            class.apply_specialization(db, |generic_context| {
-                generic_context
-                    .specialize(db, &[typed_dict.key_type(db), typed_dict.value_type(db)])
-            })
+    let return_ty = known_module_symbol(
+        db,
+        python_version,
+        KnownModule::CollectionsAbcInternal,
+        view_name,
+    )
+    .place
+    .ignore_possibly_undefined()
+    .and_then(Type::as_class_literal)
+    .map(|class| {
+        class.apply_specialization(db, |generic_context| {
+            generic_context.specialize(db, &[typed_dict.key_type(db), typed_dict.value_type(db)])
         })
-        .and_then(|class| Type::from(class).to_instance_approximation(db))
-        .unwrap_or_else(Type::unknown);
+    })
+    .and_then(|class| Type::from(class).to_instance_approximation(db))
+    .unwrap_or_else(Type::unknown);
 
     synthesize_typed_dict_no_argument_method(db, typed_dict, return_ty)
 }
@@ -954,9 +960,13 @@ impl<'db> DynamicTypedDictLiteral<'db> {
     pub(super) fn own_class_member(self, db: &'db dyn Db, name: &str) -> Member<'db> {
         let typed_dict =
             TypedDictType::new(ClassType::NonGeneric(ClassLiteral::DynamicTypedDict(self)));
-        synthesize_typed_dict_method(db, typed_dict, name, || {
-            TypedDictFields::Dynamic(self.items(db))
-        })
+        synthesize_typed_dict_method(
+            db,
+            self.scope(db).python_file(db).python_version(db),
+            typed_dict,
+            name,
+            || TypedDictFields::Dynamic(self.items(db)),
+        )
         .map(Member::definitely_declared)
         .unwrap_or_default()
     }

@@ -2437,7 +2437,11 @@ impl<'db> Bindings<'db> {
                                     _ => {}
                                 }
 
-                                let params = DataclassParams::from_flags(db, flags);
+                                let params = DataclassParams::from_flags(
+                                    db,
+                                    function_type.python_file(db).python_version(db),
+                                    flags,
+                                );
 
                                 if cls_argument.is_none_or(|cls_ty| cls_ty.is_none(db)) {
                                     overload.set_return_type(Type::DataclassDecorator(params));

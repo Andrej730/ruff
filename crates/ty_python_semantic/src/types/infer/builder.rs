@@ -9251,7 +9251,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             "This is allowed for debugging convenience but will fail at runtime",
                         );
                     }
-                    typing_extensions_symbol(db, symbol_name)
+                    typing_extensions_symbol(db, self.python_version(), symbol_name)
                 } else {
                     Place::Undefined.into()
                 }

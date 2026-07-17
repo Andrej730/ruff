@@ -163,18 +163,28 @@ impl Ty {
             Ty::LiteralString => Type::literal_string(),
             Ty::BytesLiteral(s) => Type::bytes_literal(db, s.as_bytes()),
             Ty::EnumLiteral(name) => {
-                let enum_class = known_module_symbol(db, KnownModule::Uuid, "SafeUUID")
-                    .place
-                    .expect_type()
-                    .expect_class_literal()
-                    .into_enum_class(db)
-                    .expect("`uuid.SafeUUID` is an enum");
+                let enum_class = known_module_symbol(
+                    db,
+                    Program::get(db).python_version(db),
+                    KnownModule::Uuid,
+                    "SafeUUID",
+                )
+                .place
+                .expect_type()
+                .expect_class_literal()
+                .into_enum_class(db)
+                .expect("`uuid.SafeUUID` is an enum");
                 Type::enum_literal(EnumLiteralType::new(db, enum_class, Name::new(name)))
             }
             Ty::SingleMemberEnumLiteral => {
-                let ty = known_module_symbol(db, KnownModule::Dataclasses, "MISSING")
-                    .place
-                    .expect_type();
+                let ty = known_module_symbol(
+                    db,
+                    Program::get(db).python_version(db),
+                    KnownModule::Dataclasses,
+                    "MISSING",
+                )
+                .place
+                .expect_type();
                 debug_assert!(
                     matches!(ty, Type::NominalInstance(instance) if is_single_member_enum(db, instance.class_literal(db)))
                 );
@@ -185,17 +195,26 @@ impl Ty {
                 .expect_type()
                 .to_instance_approximation(db)
                 .unwrap(),
-            Ty::AbcInstance(s) => known_module_symbol(db, KnownModule::Abc, s)
-                .place
-                .expect_type()
-                .to_instance_approximation(db)
-                .unwrap(),
-            Ty::AbcClassLiteral(s) => known_module_symbol(db, KnownModule::Abc, s)
-                .place
-                .expect_type(),
-            Ty::UnittestMockLiteral => known_module_symbol(db, KnownModule::UnittestMock, "Mock")
-                .place
-                .expect_type(),
+            Ty::AbcInstance(s) => {
+                known_module_symbol(db, Program::get(db).python_version(db), KnownModule::Abc, s)
+                    .place
+                    .expect_type()
+                    .to_instance_approximation(db)
+                    .unwrap()
+            }
+            Ty::AbcClassLiteral(s) => {
+                known_module_symbol(db, Program::get(db).python_version(db), KnownModule::Abc, s)
+                    .place
+                    .expect_type()
+            }
+            Ty::UnittestMockLiteral => known_module_symbol(
+                db,
+                Program::get(db).python_version(db),
+                KnownModule::UnittestMock,
+                "Mock",
+            )
+            .place
+            .expect_type(),
             Ty::UnittestMockInstance => Ty::UnittestMockLiteral
                 .into_type(db)
                 .to_instance_approximation(db)
@@ -241,7 +260,7 @@ impl Ty {
             ),
             Ty::SubclassOfAbcClass(s) => SubclassOfType::from(
                 db,
-                known_module_symbol(db, KnownModule::Abc, s)
+                known_module_symbol(db, Program::get(db).python_version(db), KnownModule::Abc, s)
                     .place
                     .expect_type()
                     .expect_class_literal()

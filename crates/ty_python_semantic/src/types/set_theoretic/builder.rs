@@ -2015,10 +2015,15 @@ mod tests {
             KnownClass::Bytes.to_instance(&db),
         );
 
-        let safe_uuid_class = known_module_symbol(&db, KnownModule::Uuid, "SafeUUID")
-            .place
-            .expect_type()
-            .expect_class_literal();
+        let safe_uuid_class = known_module_symbol(
+            &db,
+            crate::Program::get(&db).python_version(&db),
+            KnownModule::Uuid,
+            "SafeUUID",
+        )
+        .place
+        .expect_type()
+        .expect_class_literal();
         let enum_literal = enum_member_literals(&db, safe_uuid_class, None)
             .expect("SafeUUID is an enum")
             .next()
@@ -2216,10 +2221,15 @@ mod tests {
     fn build_intersection_enums() {
         let db = setup_db();
 
-        let safe_uuid_class = known_module_symbol(&db, KnownModule::Uuid, "SafeUUID")
-            .place
-            .ignore_possibly_undefined()
-            .unwrap();
+        let safe_uuid_class = known_module_symbol(
+            &db,
+            crate::Program::get(&db).python_version(&db),
+            KnownModule::Uuid,
+            "SafeUUID",
+        )
+        .place
+        .ignore_possibly_undefined()
+        .unwrap();
 
         let literals = enum_member_literals(&db, safe_uuid_class.expect_class_literal(), None)
             .unwrap()

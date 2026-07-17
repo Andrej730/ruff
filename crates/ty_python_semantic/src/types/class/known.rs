@@ -1152,7 +1152,13 @@ impl KnownClass {
             let class = class.class(db);
             let module = class.canonical_module(db);
             let third_party = module.is_third_party();
-            let symbol = known_module_symbol(db, module, class.name(db)).place;
+            let symbol = known_module_symbol(
+                db,
+                Program::get(db).python_version(db),
+                module,
+                class.name(db),
+            )
+            .place;
             let result = match symbol {
                 Place::Defined(DefinedPlace {
                     ty: Type::ClassLiteral(ClassLiteral::Static(class_literal)),

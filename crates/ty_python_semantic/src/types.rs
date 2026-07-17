@@ -16,8 +16,8 @@ use ruff_db::Instant;
 use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, PythonVersion};
 use ruff_text_size::Ranged;
 use smallvec::smallvec_inline;
 use ty_module_resolver::{KnownModule, Module, ModuleName, resolve_module};
@@ -871,15 +871,16 @@ pub struct DataclassParams<'db> {
 impl get_size2::GetSize for DataclassParams<'_> {}
 
 impl<'db> DataclassParams<'db> {
-    fn default_params(db: &'db dyn Db) -> Self {
-        Self::from_flags(db, DataclassFlags::default())
+    fn default_params(db: &'db dyn Db, python_version: PythonVersion) -> Self {
+        Self::from_flags(db, python_version, DataclassFlags::default())
     }
 
-    fn from_flags(db: &'db dyn Db, flags: DataclassFlags) -> Self {
-        let dataclasses_field = known_module_symbol(db, KnownModule::Dataclasses, "field")
-            .place
-            .ignore_possibly_undefined()
-            .unwrap_or_else(Type::unknown);
+    fn from_flags(db: &'db dyn Db, python_version: PythonVersion, flags: DataclassFlags) -> Self {
+        let dataclasses_field =
+            known_module_symbol(db, python_version, KnownModule::Dataclasses, "field")
+                .place
+                .ignore_possibly_undefined()
+                .unwrap_or_else(Type::unknown);
 
         Self::new(db, flags, [dataclasses_field].as_slice())
     }

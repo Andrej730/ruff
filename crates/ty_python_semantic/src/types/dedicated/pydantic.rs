@@ -1,5 +1,7 @@
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast::{ArgOrKeyword, Arguments, Expr, ExprCall, ExprDict, Keyword, name::Name};
+use ruff_python_ast::{
+    ArgOrKeyword, Arguments, Expr, ExprCall, ExprDict, Keyword, PythonVersion, name::Name,
+};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::{KnownModule, file_to_module};
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -746,6 +748,7 @@ fn class_keyword_config(db: &dyn Db, class: StaticClassLiteral<'_>) -> ModelConf
 /// Return the input type accepted by a Pydantic field's synthesized constructor parameter.
 pub(in crate::types) fn constructor_parameter_type<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     field_type: Type<'db>,
     field_strict: ConfigBoolean,
     metadata: ModelMetadata<'db>,
@@ -754,16 +757,21 @@ pub(in crate::types) fn constructor_parameter_type<'db>(
         return field_type;
     }
 
-    lax_input_type(db, field_type)
+    lax_input_type(db, python_version, field_type)
 }
 
 /// Return the documented Python input type accepted by Pydantic for `field_type` in lax mode.
-fn lax_input_type<'db>(db: &'db dyn Db, field_type: Type<'db>) -> Type<'db> {
-    lax_input_type_impl(db, field_type, &mut FxHashSet::default())
+fn lax_input_type<'db>(
+    db: &'db dyn Db,
+    python_version: PythonVersion,
+    field_type: Type<'db>,
+) -> Type<'db> {
+    lax_input_type_impl(db, python_version, field_type, &mut FxHashSet::default())
 }
 
 fn lax_input_type_impl<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     field_type: Type<'db>,
     expanding_types: &mut FxHashSet<Type<'db>>,
 ) -> Type<'db> {
@@ -775,13 +783,13 @@ fn lax_input_type_impl<'db>(
         if !expanding_types.insert(field_type) {
             return Type::any();
         }
-        let result = lax_input_type_impl(db, alias.value_type(db), expanding_types);
+        let result = lax_input_type_impl(db, python_version, alias.value_type(db), expanding_types);
         expanding_types.remove(&field_type);
         return result;
     }
 
     if field_type.as_union().and_then(|union| union.known(db)) == Some(KnownUnion::Float) {
-        return lax_alias(db, "LaxFloat");
+        return lax_alias(db, python_version, "LaxFloat");
     }
 
     if let Type::Union(union) = field_type {
@@ -790,11 +798,12 @@ fn lax_input_type_impl<'db>(
             union
                 .elements(db)
                 .iter()
-                .map(|element| lax_input_type_impl(db, *element, expanding_types)),
+                .map(|element| lax_input_type_impl(db, python_version, *element, expanding_types)),
         );
     }
 
-    if let Some(input_type) = root_model_input_type(db, field_type, expanding_types) {
+    if let Some(input_type) = root_model_input_type(db, python_version, field_type, expanding_types)
+    {
         return input_type;
     }
 
@@ -817,8 +826,12 @@ fn lax_input_type_impl<'db>(
         let Ok(elements) = field_type.try_iterate(db) else {
             return Type::any();
         };
-        let element_type =
-            lax_input_type_impl(db, elements.homogeneous_element_type(db), expanding_types);
+        let element_type = lax_input_type_impl(
+            db,
+            python_version,
+            elements.homogeneous_element_type(db),
+            expanding_types,
+        );
         return KnownClass::Iterable.to_specialized_instance(db, &[element_type]);
     }
 
@@ -831,7 +844,7 @@ fn lax_input_type_impl<'db>(
         let [key_type, value_type] = specialization.types(db) else {
             return Type::any();
         };
-        let value_type = lax_input_type_impl(db, *value_type, expanding_types);
+        let value_type = lax_input_type_impl(db, python_version, *value_type, expanding_types);
         return KnownClass::Mapping.to_specialized_instance(db, &[*key_type, value_type]);
     }
 
@@ -845,7 +858,7 @@ fn lax_input_type_impl<'db>(
         _ => None,
     };
     if let Some(alias) = builtin_alias {
-        return lax_alias(db, alias);
+        return lax_alias(db, python_version, alias);
     }
 
     let Some((module, symbol, class)) = instance_symbol(db, field_type) else {
@@ -868,7 +881,7 @@ fn lax_input_type_impl<'db>(
         _ => None,
     };
     if let Some(alias) = symbol_alias {
-        return lax_alias(db, alias);
+        return lax_alias(db, python_version, alias);
     }
 
     let alias = if (module, symbol) == (KnownModule::Re, "Pattern") {
@@ -895,7 +908,7 @@ fn lax_input_type_impl<'db>(
         return Type::any();
     };
 
-    lax_alias(db, alias)
+    lax_alias(db, python_version, alias)
 }
 
 /// Return the input type accepted for a Pydantic root model field.
@@ -905,6 +918,7 @@ fn lax_input_type_impl<'db>(
 /// `IntList` instance and an `Iterable[LaxInt]`.
 fn root_model_input_type<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     field_type: Type<'db>,
     expanding_types: &mut FxHashSet<Type<'db>>,
 ) -> Option<Type<'db>> {
@@ -925,7 +939,8 @@ fn root_model_input_type<'db>(
     if !expanding_types.insert(field_type) {
         return Some(Type::any());
     }
-    let root_input_type = lax_input_type_impl(db, root_field.declared_ty, expanding_types);
+    let root_input_type =
+        lax_input_type_impl(db, python_version, root_field.declared_ty, expanding_types);
 
     expanding_types.remove(&field_type);
     Some(UnionType::from_two_elements(
@@ -946,8 +961,8 @@ fn instance_symbol<'db>(
 }
 
 /// Return a lax-input alias like `LaxInt` from `ty_extensions.pydantic`.
-fn lax_alias<'db>(db: &'db dyn Db, name: &str) -> Type<'db> {
-    match known_module_symbol(db, KnownModule::TyExtensionsPydantic, name)
+fn lax_alias<'db>(db: &'db dyn Db, python_version: PythonVersion, name: &str) -> Type<'db> {
+    match known_module_symbol(db, python_version, KnownModule::TyExtensionsPydantic, name)
         .place
         .ignore_possibly_undefined()
     {

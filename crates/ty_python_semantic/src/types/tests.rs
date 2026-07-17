@@ -31,10 +31,20 @@ fn typing_vs_typeshed_no_default() {
         .build()
         .unwrap();
 
-    let typing_no_default = typing_symbol(&db, "NoDefault").place.expect_type();
-    let typing_extensions_no_default = typing_extensions_symbol(&db, "NoDefault")
-        .place
-        .expect_type();
+    let typing_no_default = typing_symbol(
+        &db,
+        crate::Program::get(&db).python_version(&db),
+        "NoDefault",
+    )
+    .place
+    .expect_type();
+    let typing_extensions_no_default = typing_extensions_symbol(
+        &db,
+        crate::Program::get(&db).python_version(&db),
+        "NoDefault",
+    )
+    .place
+    .expect_type();
 
     assert_eq!(typing_no_default.display(&db).to_string(), "NoDefault");
     assert_eq!(

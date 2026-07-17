@@ -1511,7 +1511,13 @@ impl<'db> StaticClassLiteral<'db> {
                 if name == "__init__"
                     && let Some(metadata) = field_policy.pydantic_metadata()
                 {
-                    field_ty = pydantic::constructor_parameter_type(db, field_ty, strict, metadata);
+                    field_ty = pydantic::constructor_parameter_type(
+                        db,
+                        self.python_file(db).python_version(db),
+                        field_ty,
+                        strict,
+                        metadata,
+                    );
                 }
 
                 if pydantic_constructor_fields_are_optional && default_ty.is_none() {
@@ -1822,6 +1828,7 @@ impl<'db> StaticClassLiteral<'db> {
             }
             (CodeGeneratorKind::TypedDict, name) => synthesize_typed_dict_method(
                 db,
+                self.python_file(db).python_version(db),
                 instance_ty
                     .as_typed_dict()
                     .expect("TypedDict code generation should use a TypedDict instance"),

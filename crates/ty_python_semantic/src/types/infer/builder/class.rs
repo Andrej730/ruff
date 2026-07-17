@@ -182,7 +182,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 .as_function_literal()
                 .is_some_and(|function| function.is_known(db, KnownFunction::Dataclass))
             {
-                dataclass_params = Some(DataclassParams::default_params(db));
+                dataclass_params = Some(DataclassParams::default_params(db, self.python_version()));
                 continue;
             }
 
