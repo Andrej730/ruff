@@ -639,6 +639,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .infer_expression(operand, TypeContext::default());
                     if let Err(error) = operand_value.try_call_dunder(
                         self.db(),
+                        self.python_version(),
                         "__invert__",
                         CallArguments::none(),
                         TypeContext::default(),
@@ -2303,6 +2304,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let Some(callable_type) = argument_type
                     .try_upcast_to_callable_with_recursive_fallback(
                         db,
+                        self.python_version(),
                         self.recursive_type_expression_definition(),
                     )
                     .map(|callables| {

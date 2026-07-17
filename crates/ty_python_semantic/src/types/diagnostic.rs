@@ -3015,6 +3015,7 @@ pub(crate) fn report_invalid_or_unsupported_base(
 
     match base_type.try_call_dunder(
         db,
+        context.python_version(),
         "__mro_entries__",
         CallArguments::positional([tuple_of_types]),
         TypeContext::default(),

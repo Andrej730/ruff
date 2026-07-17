@@ -145,6 +145,7 @@ impl<'db> Type<'db> {
 
         let left_class = left_ty.to_meta_type(db);
         let right_class = right_ty.to_meta_type(db);
+        let python_version = crate::Program::get(db).python_version(db);
         if reflected_priority != ReflectedMethodPriority::Never {
             let reflected_dunder = op.reflected_dunder();
             let rhs_reflected = right_class.member(db, reflected_dunder).place;
@@ -156,6 +157,7 @@ impl<'db> Type<'db> {
             {
                 let call_on_right_instance = right_ty.try_call_dunder_with_policy(
                     db,
+                    python_version,
                     reflected_dunder,
                     &mut CallArguments::positional([left_ty]),
                     TypeContext::default(),
@@ -166,6 +168,7 @@ impl<'db> Type<'db> {
                     return Ok(call_on_right_instance.or_else(|_| {
                         left_ty.try_call_dunder_with_policy(
                             db,
+                            python_version,
                             op.dunder(),
                             &mut CallArguments::positional([right_ty]),
                             TypeContext::default(),
@@ -176,6 +179,7 @@ impl<'db> Type<'db> {
 
                 let call_on_left_instance = left_ty.try_call_dunder_with_policy(
                     db,
+                    python_version,
                     op.dunder(),
                     &mut CallArguments::positional([right_ty]),
                     TypeContext::default(),
@@ -202,6 +206,7 @@ impl<'db> Type<'db> {
 
         let call_on_left_instance = left_ty.try_call_dunder_with_policy(
             db,
+            python_version,
             op.dunder(),
             &mut CallArguments::positional([right_ty]),
             TypeContext::default(),
@@ -214,6 +219,7 @@ impl<'db> Type<'db> {
             } else {
                 Ok(right_ty.try_call_dunder_with_policy(
                     db,
+                    python_version,
                     op.reflected_dunder(),
                     &mut CallArguments::positional([left_ty]),
                     TypeContext::default(),

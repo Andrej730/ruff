@@ -191,6 +191,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         Type::TypedDict(result_typed_dict)
             .try_call_dunder(
                 db,
+                self.python_version(),
                 dunder_name,
                 CallArguments::positional([update_ty]),
                 TypeContext::default(),

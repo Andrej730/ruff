@@ -296,6 +296,7 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
         // A terminal `__setattr__` blocks even explicitly declared attributes.
         let setattr_result = object_ty.try_call_dunder_with_policy(
             db,
+            self.builder.python_version(),
             "__setattr__",
             &mut CallArguments::positional([Type::string_literal(db, self.attribute), value_ty]),
             TypeContext::default(),
@@ -479,7 +480,13 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
             return true;
         }
 
-        if property_setter_returns_never(db, descriptor_ty, receiver_ty, value_ty) {
+        if property_setter_returns_never(
+            db,
+            self.builder.python_version(),
+            descriptor_ty,
+            receiver_ty,
+            value_ty,
+        ) {
             if emit_diagnostics {
                 self.report(AssignmentAttributeWriteDiagnostic::TerminalDescriptor);
             }
@@ -488,6 +495,7 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
 
         match descriptor_ty.try_call_dunder_with_policy(
             db,
+            self.builder.python_version(),
             "__set__",
             &mut CallArguments::positional([receiver_ty, value_ty]),
             TypeContext::default(),
@@ -520,7 +528,13 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
         emit_diagnostics: bool,
     ) -> bool {
         let db = self.builder.db();
-        if property_setter_returns_never(db, descriptor_ty, object_ty, value_ty) {
+        if property_setter_returns_never(
+            db,
+            self.builder.python_version(),
+            descriptor_ty,
+            object_ty,
+            value_ty,
+        ) {
             if emit_diagnostics {
                 self.report(AssignmentAttributeWriteDiagnostic::TerminalDescriptor);
             }
@@ -529,6 +543,7 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
 
         match setter_ty.try_call(
             db,
+            self.builder.python_version(),
             &CallArguments::positional([descriptor_ty, object_ty, value_ty]),
         ) {
             Ok(_) => true,

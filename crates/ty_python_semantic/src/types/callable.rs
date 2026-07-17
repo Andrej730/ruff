@@ -1,3 +1,4 @@
+use ruff_python_ast::PythonVersion;
 use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec_inline};
 
@@ -40,17 +41,23 @@ impl<'db> Type<'db> {
         Type::Callable(CallableType::paramspec_value(db, parameters))
     }
 
-    pub(crate) fn try_upcast_to_callable(self, db: &'db dyn Db) -> Option<CallableTypes<'db>> {
-        self.try_upcast_to_callable_with_policy(db, UpcastPolicy::default())
+    pub(crate) fn try_upcast_to_callable(
+        self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> Option<CallableTypes<'db>> {
+        self.try_upcast_to_callable_with_policy(db, python_version, UpcastPolicy::default())
     }
 
     pub(crate) fn try_upcast_to_callable_with_recursive_fallback(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         recursive_definition: Option<Definition<'db>>,
     ) -> Option<CallableTypes<'db>> {
         self.try_upcast_to_callable_with_policy_and_context(
             db,
+            python_version,
             UpcastPolicy::default(),
             CallableUpcastContext {
                 recursive_definition,
@@ -61,10 +68,12 @@ impl<'db> Type<'db> {
     pub(crate) fn try_upcast_to_callable_with_policy(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         policy: UpcastPolicy,
     ) -> Option<CallableTypes<'db>> {
         self.try_upcast_to_callable_with_policy_and_context(
             db,
+            python_version,
             policy,
             CallableUpcastContext::default(),
         )
@@ -73,11 +82,17 @@ impl<'db> Type<'db> {
     fn try_upcast_to_callable_with_policy_and_context(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         policy: UpcastPolicy,
         context: CallableUpcastContext<'db>,
     ) -> Option<CallableTypes<'db>> {
         if let Some(fallback) = self.materialized_divergent_fallback() {
-            return fallback.try_upcast_to_callable_with_policy_and_context(db, policy, context);
+            return fallback.try_upcast_to_callable_with_policy_and_context(
+                db,
+                python_version,
+                policy,
+                context,
+            );
         }
 
         match self {
@@ -123,7 +138,12 @@ impl<'db> Type<'db> {
                 {
                     place
                         .ty
-                        .try_upcast_to_callable_with_policy_and_context(db, policy, context)
+                        .try_upcast_to_callable_with_policy_and_context(
+                            db,
+                            python_version,
+                            policy,
+                            context,
+                        )
                         // The callable instance itself doesn't inherit the descriptor behavior of
                         // its `__call__` method.
                         .map(|callables| callables.map(|callable| callable.into_regular(db)))
@@ -139,7 +159,12 @@ impl<'db> Type<'db> {
 
             Type::NewTypeInstance(newtype) => newtype
                 .concrete_base_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(
+                    db,
+                    python_version,
+                    policy,
+                    context,
+                ),
 
             Type::SubclassOf(subclass_of_ty) if policy == UpcastPolicy::Sound => {
                 Some(CallableTypes::one(CallableType::function_like(
@@ -158,7 +183,12 @@ impl<'db> Type<'db> {
                     Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                         let upcast_callables = bound
                             .to_meta_type(db)
-                            .try_upcast_to_callable_with_policy_and_context(db, policy, context)?;
+                            .try_upcast_to_callable_with_policy_and_context(
+                                db,
+                                python_version,
+                                policy,
+                                context,
+                            )?;
                         Some(upcast_callables.map(|callable| {
                             let signatures = callable
                                 .signatures(db)
@@ -178,7 +208,10 @@ impl<'db> Type<'db> {
                             let element_upcast = constraint
                                 .to_meta_type(db)
                                 .try_upcast_to_callable_with_policy_and_context(
-                                    db, policy, context,
+                                    db,
+                                    python_version,
+                                    policy,
+                                    context,
                                 )?;
                             for callable in element_upcast.into_inner() {
                                 let signatures = callable
@@ -209,8 +242,12 @@ impl<'db> Type<'db> {
             Type::Union(union) => {
                 let mut callables = SmallVec::new();
                 for element in union.elements(db) {
-                    let element_callable = element
-                        .try_upcast_to_callable_with_policy_and_context(db, policy, context)?;
+                    let element_callable = element.try_upcast_to_callable_with_policy_and_context(
+                        db,
+                        python_version,
+                        policy,
+                        context,
+                    )?;
                     callables.extend(element_callable.into_inner());
                 }
                 Some(CallableTypes::new(callables))
@@ -219,13 +256,23 @@ impl<'db> Type<'db> {
             Type::LiteralValue(literal) => match literal.kind() {
                 LiteralValueTypeKind::Enum(enum_literal) => enum_literal
                     .enum_class_instance(db)
-                    .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                    .try_upcast_to_callable_with_policy_and_context(
+                        db,
+                        python_version,
+                        policy,
+                        context,
+                    ),
                 _ => None,
             },
 
             Type::TypeAlias(alias) => alias
                 .value_type(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(
+                    db,
+                    python_version,
+                    policy,
+                    context,
+                ),
 
             Type::KnownBoundMethod(KnownBoundMethodType::FunctionTypeDunderCall(function))
                 if context.is_recursive_reference(db, function) =>
@@ -235,7 +282,7 @@ impl<'db> Type<'db> {
 
             Type::KnownBoundMethod(method) => Some(CallableTypes::one(CallableType::new(
                 db,
-                CallableSignature::from_overloads(method.signatures(db)),
+                CallableSignature::from_overloads(method.signatures(db, python_version)),
                 CallableTypeKind::Regular,
                 CallableFunctionProvenance::None,
             ))),
@@ -243,7 +290,9 @@ impl<'db> Type<'db> {
             Type::WrapperDescriptor(wrapper_descriptor) => {
                 Some(CallableTypes::one(CallableType::new(
                     db,
-                    CallableSignature::from_overloads(wrapper_descriptor.signatures(db)),
+                    CallableSignature::from_overloads(
+                        wrapper_descriptor.signatures(db, python_version),
+                    ),
                     CallableTypeKind::Regular,
                     CallableFunctionProvenance::None,
                 )))
@@ -278,13 +327,18 @@ impl<'db> Type<'db> {
                 intersection
                     .finite_alternative_union(db)
                     .and_then(|alternatives| {
-                        alternatives.try_upcast_to_callable_with_policy(db, policy)
+                        alternatives.try_upcast_to_callable_with_policy(db, python_version, policy)
                     })
             }
 
             Type::EnumComplement(complement) => complement
                 .remaining_literal_union(db)
-                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+                .try_upcast_to_callable_with_policy_and_context(
+                    db,
+                    python_version,
+                    policy,
+                    context,
+                ),
 
             // TODO
             Type::DataclassDecorator(_)

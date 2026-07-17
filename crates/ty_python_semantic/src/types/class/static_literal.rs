@@ -1042,7 +1042,7 @@ impl<'db> StaticClassLiteral<'db> {
                 // TODO: Other keyword arguments?
                 let arguments = CallArguments::positional([name, bases, namespace]);
 
-                let return_ty_result = match metaclass.try_call(db, &arguments) {
+                let return_ty_result = match metaclass.try_call(db, python_version, &arguments) {
                     Ok(bindings) => Ok(bindings.return_type(db)),
 
                     Err(CallError(CallErrorKind::NotCallable, bindings)) => Err(MetaclassError {
@@ -1375,10 +1375,14 @@ impl<'db> StaticClassLiteral<'db> {
                 })
             && self.has_ordering_method_in_mro(db, specialization)
             && let Some(root_method_ty) = self.total_ordering_root_method(db, specialization)
-            && let Some(callables) = root_method_ty.try_upcast_to_callable(db)
+            && let Some((python_version, callables)) = {
+                let python_version = self.python_file(db).python_version(db);
+                root_method_ty
+                    .try_upcast_to_callable(db, python_version)
+                    .map(|callables| (python_version, callables))
+            }
         {
-            let bool_ty = KnownClass::Bool
-                .to_instance_with_version(db, self.python_file(db).python_version(db));
+            let bool_ty = KnownClass::Bool.to_instance_with_version(db, python_version);
             let synthesized_callables = callables.map(|callable| {
                 let signatures = CallableSignature::from_overloads(
                     callable.signatures(db).iter().map(|signature| {
@@ -1497,22 +1501,24 @@ impl<'db> StaticClassLiteral<'db> {
                         //
                         // We union parameter types across overloads of a single callable, intersect
                         // callable bindings inside an intersection element, and union outer elements.
-                        field_ty = dunder_set.bindings(db).map_types(db, |binding| {
-                            let mut value_types = UnionBuilder::new(db);
-                            let mut has_value_type = false;
-                            for overload in binding {
-                                if let Some(value_param) =
-                                    overload.signature.parameters().get_positional(2)
-                                {
-                                    value_types = value_types.add(value_param.annotated_type());
-                                    has_value_type = true;
-                                } else if overload.signature.parameters().is_gradual() {
-                                    value_types = value_types.add(Type::unknown());
-                                    has_value_type = true;
+                        field_ty = dunder_set
+                            .bindings(db, self.python_file(db).python_version(db))
+                            .map_types(db, |binding| {
+                                let mut value_types = UnionBuilder::new(db);
+                                let mut has_value_type = false;
+                                for overload in binding {
+                                    if let Some(value_param) =
+                                        overload.signature.parameters().get_positional(2)
+                                    {
+                                        value_types = value_types.add(value_param.annotated_type());
+                                        has_value_type = true;
+                                    } else if overload.signature.parameters().is_gradual() {
+                                        value_types = value_types.add(Type::unknown());
+                                        has_value_type = true;
+                                    }
                                 }
-                            }
-                            has_value_type.then(|| value_types.build())
-                        });
+                                has_value_type.then(|| value_types.build())
+                            });
 
                         // The default value of the attribute is *not* determined by the right hand side
                         // of the class-body assignment. Instead, the runtime invokes `__get__` on the

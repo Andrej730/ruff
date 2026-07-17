@@ -1326,6 +1326,7 @@ impl<'db> Type<'db> {
             // by always returning `False`, for example.
             let call_result = self.try_call_dunder_with_policy(
                 db,
+                crate::Program::get(db).python_version(db),
                 dunder_name,
                 &mut CallArguments::positional([Type::unknown()]),
                 TypeContext::default(),
@@ -3388,7 +3389,11 @@ impl<'db> Type<'db> {
 
             let instance_ty = instance.unwrap_or_else(|| Type::none(db));
             let return_ty = descr_get
-                .try_call(db, &CallArguments::positional([ty, instance_ty, owner]))
+                .try_call(
+                    db,
+                    crate::Program::get(db).python_version(db),
+                    &CallArguments::positional([ty, instance_ty, owner]),
+                )
                 .map(|bindings| {
                     if descr_get_boundness == Definedness::AlwaysDefined {
                         bindings.return_type(db)
@@ -4543,6 +4548,7 @@ impl<'db> Type<'db> {
 
         let return_ty = match self.try_call_dunder(
             db,
+            crate::Program::get(db).python_version(db),
             "__len__",
             CallArguments::none(),
             TypeContext::default(),
@@ -4583,7 +4589,11 @@ impl<'db> Type<'db> {
                 definedness: Definedness::AlwaysDefined,
                 ..
             }) => getitem_method
-                .try_call(db, &CallArguments::positional([key]))
+                .try_call(
+                    db,
+                    crate::Program::get(db).python_version(db),
+                    &CallArguments::positional([key]),
+                )
                 .ok()
                 .map(|bindings| bindings.return_type(db)),
 
@@ -4603,7 +4613,11 @@ impl<'db> Type<'db> {
                 definedness: Definedness::AlwaysDefined,
                 ..
             }) => keys_method
-                .try_call(db, &CallArguments::none())
+                .try_call(
+                    db,
+                    crate::Program::get(db).python_version(db),
+                    &CallArguments::none(),
+                )
                 .ok()
                 .and_then(|bindings| {
                     Some(
@@ -4635,9 +4649,9 @@ impl<'db> Type<'db> {
     /// elements might be inconsistent, such that there's no argument list that's valid for all
     /// elements. It's usually best to only worry about "callability" relative to a particular
     /// argument list, via [`try_call`][Self::try_call] and [`CallErrorKind::NotCallable`].
-    fn bindings(self, db: &'db dyn Db) -> Bindings<'db> {
+    fn bindings(self, db: &'db dyn Db, python_version: PythonVersion) -> Bindings<'db> {
         if let Some(fallback) = self.materialized_divergent_fallback() {
-            return fallback.bindings(db);
+            return fallback.bindings(db, python_version);
         }
 
         match self {
@@ -4649,11 +4663,16 @@ impl<'db> Type<'db> {
             Type::TypeVar(bound_typevar) => {
                 match bound_typevar.typevar(db).bound_or_constraints(db) {
                     None => CallableBinding::not_callable(self).into(),
-                    Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.bindings(db),
+                    Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
+                        bound.bindings(db, python_version)
+                    }
                     Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
                         Bindings::from_union(
                             self,
-                            constraints.elements(db).iter().map(|ty| ty.bindings(db)),
+                            constraints
+                                .elements(db)
+                                .iter()
+                                .map(|ty| ty.bindings(db, python_version)),
                         )
                     }
                 }
@@ -4686,12 +4705,14 @@ impl<'db> Type<'db> {
             }
 
             Type::KnownBoundMethod(method) => {
-                CallableBinding::from_overloads(self, method.signatures(db)).into()
+                CallableBinding::from_overloads(self, method.signatures(db, python_version)).into()
             }
 
-            Type::WrapperDescriptor(wrapper_descriptor) => {
-                CallableBinding::from_overloads(self, wrapper_descriptor.signatures(db)).into()
-            }
+            Type::WrapperDescriptor(wrapper_descriptor) => CallableBinding::from_overloads(
+                self,
+                wrapper_descriptor.signatures(db, python_version),
+            )
+            .into(),
 
             // TODO: We should probably also check the original return type of the function
             // that was decorated with `@dataclass_transform`, to see if it is consistent with
@@ -4765,7 +4786,6 @@ impl<'db> Type<'db> {
                 .into(),
 
                 Some(KnownFunction::Dataclass) => {
-                    let python_version = function_type.python_file(db).python_version(db);
                     let bool_parameter = |name: &'static str, default: bool| {
                         Parameter::keyword_only(Name::new_static(name))
                             .with_annotated_type(
@@ -4852,26 +4872,34 @@ impl<'db> Type<'db> {
 
             Type::ClassLiteral(class) => self
                 // TODO this should be called from `constructor_bindings` for better consistency
-                .known_class_literal_bindings(db, class)
-                .unwrap_or_else(|| self.constructor_bindings(db, ClassType::NonGeneric(class))),
+                .known_class_literal_bindings(db, python_version, class)
+                .unwrap_or_else(|| {
+                    self.constructor_bindings(db, python_version, ClassType::NonGeneric(class))
+                }),
 
-            Type::GenericAlias(alias) => self.constructor_bindings(db, ClassType::Generic(alias)),
+            Type::GenericAlias(alias) => {
+                self.constructor_bindings(db, python_version, ClassType::Generic(alias))
+            }
 
             Type::SubclassOf(subclass_of_type) => match subclass_of_type.subclass_of() {
                 SubclassOfInner::Dynamic(dynamic_type) => {
                     Binding::single(self, Signature::dynamic(Type::Dynamic(dynamic_type))).into()
                 }
-                SubclassOfInner::Class(class) => self.constructor_bindings(db, class),
+                SubclassOfInner::Class(class) => {
+                    self.constructor_bindings(db, python_version, class)
+                }
                 SubclassOfInner::Protocol(protocol) => protocol.class_origin().map_or_else(
                     || Binding::single(self, Signature::dynamic(Type::unknown())).into(),
-                    |origin| self.constructor_bindings(db, *origin),
+                    |origin| self.constructor_bindings(db, python_version, *origin),
                 ),
                 SubclassOfInner::TypeVar(tvar) => {
                     let constructor_instance_type = Type::TypeVar(tvar);
                     let bindings = match tvar.typevar(db).bound_or_constraints(db) {
-                        None => KnownClass::Type.to_instance(db).bindings(db),
+                        None => KnownClass::Type
+                            .to_instance_with_version(db, python_version)
+                            .bindings(db, python_version),
                         Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
-                            bound.to_meta_type(db).bindings(db)
+                            bound.to_meta_type(db).bindings(db, python_version)
                         }
                         Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
                             Bindings::from_union(
@@ -4879,7 +4907,7 @@ impl<'db> Type<'db> {
                                 constraints
                                     .elements(db)
                                     .iter()
-                                    .map(|ty| ty.to_meta_type(db).bindings(db)),
+                                    .map(|ty| ty.to_meta_type(db).bindings(db, python_version)),
                             )
                         }
                     };
@@ -4928,7 +4956,7 @@ impl<'db> Type<'db> {
                         definedness: boundness,
                         ..
                     }) => {
-                        let mut bindings = dunder_callable.bindings(db);
+                        let mut bindings = dunder_callable.bindings(db, python_version);
                         bindings.replace_callable_type(dunder_callable, self);
                         if boundness == Definedness::PossiblyUndefined {
                             bindings.set_dunder_call_is_possibly_unbound();
@@ -4951,17 +4979,19 @@ impl<'db> Type<'db> {
                 union
                     .elements(db)
                     .iter()
-                    .map(|element| element.bindings(db)),
+                    .map(|element| element.bindings(db, python_version)),
             ),
 
             Type::Intersection(intersection) => Bindings::from_intersection(
                 self,
                 intersection
                     .positive_elements_or_object(db)
-                    .map(|element| element.bindings(db)),
+                    .map(|element| element.bindings(db, python_version)),
             ),
 
-            Type::EnumComplement(complement) => complement.to_intersection(db).bindings(db),
+            Type::EnumComplement(complement) => {
+                complement.to_intersection(db).bindings(db, python_version)
+            }
 
             Type::DataclassDecorator(_) => {
                 let typevar = BoundTypeVarInstance::synthetic(
@@ -4988,9 +5018,9 @@ impl<'db> Type<'db> {
             Type::SpecialForm(_) => CallableBinding::not_callable(self).into(),
 
             Type::LiteralValue(literal) => match literal.kind() {
-                LiteralValueTypeKind::Enum(enum_literal) => {
-                    enum_literal.enum_class_instance(db).bindings(db)
-                }
+                LiteralValueTypeKind::Enum(enum_literal) => enum_literal
+                    .enum_class_instance(db)
+                    .bindings(db, python_version),
                 _ => CallableBinding::not_callable(self).into(),
             },
 
@@ -5007,13 +5037,13 @@ impl<'db> Type<'db> {
             Type::KnownInstance(
                 KnownInstanceType::FunctoolsPartial(partial)
                 | KnownInstanceType::FunctoolsPartialCall(partial),
-            ) => Type::Callable(partial.partial(db)).bindings(db),
+            ) => Type::Callable(partial.partial(db)).bindings(db, python_version),
 
-            Type::KnownInstance(known_instance) => {
-                known_instance.instance_fallback(db).bindings(db)
-            }
+            Type::KnownInstance(known_instance) => known_instance
+                .instance_fallback(db)
+                .bindings(db, python_version),
 
-            Type::TypeAlias(alias) => alias.value_type(db).bindings(db),
+            Type::TypeAlias(alias) => alias.value_type(db).bindings(db, python_version),
 
             Type::PropertyInstance(_)
             | Type::AlwaysFalsy
@@ -5030,13 +5060,13 @@ impl<'db> Type<'db> {
     fn known_class_literal_bindings(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         class: ClassLiteral<'db>,
     ) -> Option<Bindings<'db>> {
         // TODO: Some of these cases date back to when we didn't even support overloads yet; see if
         // any can be removed: https://github.com/astral-sh/ty/issues/2715
         match class.known(db)? {
             KnownClass::Bool => {
-                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class bool(int):
                 //     def __new__(cls, o: object = ..., /) -> Self: ...
@@ -5070,7 +5100,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Super => {
-                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class super:
                 //     @overload
@@ -5111,7 +5140,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Deprecated => {
-                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class deprecated:
                 //     def __new__(
@@ -5137,8 +5165,7 @@ impl<'db> Type<'db> {
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         warning_class_type,
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
+                                        Type::none_with_version(db, python_version),
                                     ))
                                     .with_default_type(warning_class_type),
                                 Parameter::keyword_only(Name::new_static("stacklevel"))
@@ -5156,7 +5183,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::TypeAliasType => {
-                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // def __new__(
                 //     cls,
@@ -5203,7 +5229,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Property => {
-                let python_version = class.python_file(db).python_version(db);
                 let getter_signature = Signature::new(
                     Parameters::standard([
                         Parameter::positional_only(None).with_annotated_type(Type::any())
@@ -5215,7 +5240,7 @@ impl<'db> Type<'db> {
                         Parameter::positional_only(None).with_annotated_type(Type::any()),
                         Parameter::positional_only(None).with_annotated_type(Type::any()),
                     ]),
-                    KnownClass::NoneType.to_instance_with_version(db, python_version),
+                    Type::none_with_version(db, python_version),
                 );
                 let deleter_signature = Signature::new(
                     Parameters::standard([
@@ -5233,47 +5258,31 @@ impl<'db> Type<'db> {
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, getter_signature),
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
+                                        Type::none_with_version(db, python_version),
                                     ))
-                                    .with_default_type(
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
-                                    ),
+                                    .with_default_type(Type::none_with_version(db, python_version)),
                                 Parameter::positional_or_keyword(Name::new_static("fset"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, setter_signature),
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
+                                        Type::none_with_version(db, python_version),
                                     ))
-                                    .with_default_type(
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
-                                    ),
+                                    .with_default_type(Type::none_with_version(db, python_version)),
                                 Parameter::positional_or_keyword(Name::new_static("fdel"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, deleter_signature),
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
+                                        Type::none_with_version(db, python_version),
                                     ))
-                                    .with_default_type(
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
-                                    ),
+                                    .with_default_type(Type::none_with_version(db, python_version)),
                                 Parameter::positional_or_keyword(Name::new_static("doc"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         KnownClass::Str
                                             .to_instance_with_version(db, python_version),
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
+                                        Type::none_with_version(db, python_version),
                                     ))
-                                    .with_default_type(
-                                        KnownClass::NoneType
-                                            .to_instance_with_version(db, python_version),
-                                    ),
+                                    .with_default_type(Type::none_with_version(db, python_version)),
                             ]),
                             Type::unknown(),
                         ),
@@ -5283,7 +5292,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::FunctoolsPartial => {
-                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class partial(Generic[_T]):
                 //     def __new__(cls, func: Callable[..., _T], /, *args: Any, **kwargs: Any) -> Self: ...
@@ -5325,7 +5333,6 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Tuple => {
-                let python_version = class.python_file(db).python_version(db);
                 let element_ty = BoundTypeVarInstance::synthetic(
                     db,
                     Name::new_static("T"),
@@ -5370,7 +5377,12 @@ impl<'db> Type<'db> {
 
     // Build bindings for constructor calls by combining `__new__`/`__init__` signatures.
     // Returns fallback bindings for cases that intentionally keep bespoke call behavior.
-    fn constructor_bindings(self, db: &'db dyn Db, class: ClassType<'db>) -> Bindings<'db> {
+    fn constructor_bindings(
+        self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+        class: ClassType<'db>,
+    ) -> Bindings<'db> {
         fn resolve_dunder_new_callable<'db>(
             db: &'db dyn Db,
             owner: Type<'db>,
@@ -5468,10 +5480,7 @@ impl<'db> Type<'db> {
         // functional syntax for creating enum classes. TODO we should ideally check e.g.
         // `MyEnum(1)` to make sure `1` is a valid value for `MyEnum`.
         if KnownClass::Enum
-            .to_class_literal_with_version(
-                db,
-                class.class_literal(db).python_file(db).python_version(db),
-            )
+            .to_class_literal_with_version(db, python_version)
             .to_class_type(db)
             .is_some_and(|enum_class| class.is_subclass_of(db, enum_class))
         {
@@ -5518,13 +5527,16 @@ impl<'db> Type<'db> {
         let (new_bindings, has_any_new) = match new_method.as_ref().map(|method| method.place) {
             Some(place) => match resolve_dunder_new_callable(db, self_type, place) {
                 Some((new_callable, definedness)) => {
-                    let mut bindings =
-                        bind_constructor_new(db, new_callable.bindings(db), self_type)
-                            .into_constructor_bindings(
-                                constructor_instance_ty,
-                                ConstructorCallableKind::New,
-                            )
-                            .with_constructed_instance_type(db, constructor_instance_ty);
+                    let mut bindings = bind_constructor_new(
+                        db,
+                        new_callable.bindings(db, python_version),
+                        self_type,
+                    )
+                    .into_constructor_bindings(
+                        constructor_instance_ty,
+                        ConstructorCallableKind::New,
+                    )
+                    .with_constructed_instance_type(db, constructor_instance_ty);
                     if definedness == Definedness::PossiblyUndefined {
                         bindings.set_implicit_dunder_new_is_possibly_unbound();
                     }
@@ -5546,7 +5558,7 @@ impl<'db> Type<'db> {
                 _,
             ) => {
                 let mut bindings = init_method
-                    .bindings(db)
+                    .bindings(db, python_version)
                     .into_constructor_bindings(
                         constructor_instance_ty,
                         ConstructorCallableKind::Init,
@@ -5570,7 +5582,7 @@ impl<'db> Type<'db> {
                         ..
                     }) => {
                         let mut bindings = init_method
-                            .bindings(db)
+                            .bindings(db, python_version)
                             .into_constructor_bindings(
                                 constructor_instance_ty,
                                 ConstructorCallableKind::Init,
@@ -5624,7 +5636,7 @@ impl<'db> Type<'db> {
         }) = metaclass_dunder_call.place
         {
             let mut metaclass_bindings = metaclass_call_method
-                .bindings(db)
+                .bindings(db, python_version)
                 .into_constructor_bindings(
                     constructor_instance_ty,
                     ConstructorCallableKind::MetaclassCall,
@@ -5654,13 +5666,15 @@ impl<'db> Type<'db> {
     fn try_call(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         argument_types: &CallArguments<'_, 'db>,
     ) -> Result<Bindings<'db>, CallError<'db>> {
         let constraints = ConstraintSetBuilder::new();
-        self.bindings(db)
+        self.bindings(db, python_version)
             .match_parameters(db, argument_types)
             .check_types(
                 db,
+                python_version,
                 &constraints,
                 argument_types,
                 TypeContext::default(),
@@ -5675,12 +5689,14 @@ impl<'db> Type<'db> {
     fn try_call_dunder(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         name: &str,
         mut argument_types: CallArguments<'_, 'db>,
         tcx: TypeContext<'db>,
     ) -> Result<Bindings<'db>, CallDunderError<'db>> {
         self.try_call_dunder_with_policy(
             db,
+            python_version,
             name,
             &mut argument_types,
             tcx,
@@ -5698,17 +5714,32 @@ impl<'db> Type<'db> {
     fn try_call_dunder_with_policy(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         name: &str,
         argument_types: &mut CallArguments<'_, 'db>,
         tcx: TypeContext<'db>,
         policy: MemberLookupPolicy,
     ) -> Result<Bindings<'db>, CallDunderError<'db>> {
         if let Type::Intersection(intersection) = self {
-            return intersection.try_call_dunder_with_policy(db, name, argument_types, tcx, policy);
+            return intersection.try_call_dunder_with_policy(
+                db,
+                python_version,
+                name,
+                argument_types,
+                tcx,
+                policy,
+            );
         }
 
         if let Type::Union(union) = self {
-            return union.try_call_dunder_with_policy(db, name, argument_types, tcx, policy);
+            return union.try_call_dunder_with_policy(
+                db,
+                python_version,
+                name,
+                argument_types,
+                tcx,
+                policy,
+            );
         }
 
         // Implicit calls to dunder methods never access instance members, so we pass
@@ -5723,9 +5754,9 @@ impl<'db> Type<'db> {
             }) => {
                 let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
-                    .bindings(db)
+                    .bindings(db, python_version)
                     .match_parameters(db, argument_types)
-                    .check_types(db, &constraints, argument_types, tcx, &[]);
+                    .check_types(db, python_version, &constraints, argument_types, tcx, &[]);
 
                 let bindings = match bindings {
                     Ok(bindings) => bindings,
@@ -5756,6 +5787,7 @@ impl<'db> Type<'db> {
     fn try_call_dunder_on_class(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         name: &str,
         argument_types: &CallArguments<'_, 'db>,
         tcx: TypeContext<'db>,
@@ -5769,9 +5801,9 @@ impl<'db> Type<'db> {
             }) => {
                 let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
-                    .bindings(db)
+                    .bindings(db, python_version)
                     .match_parameters(db, argument_types)
-                    .check_types(db, &constraints, argument_types, tcx, &[]);
+                    .check_types(db, python_version, &constraints, argument_types, tcx, &[]);
 
                 let bindings = match bindings {
                     Ok(bindings) => bindings,
@@ -5810,6 +5842,7 @@ impl<'db> Type<'db> {
 
             self.try_call_dunder(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__getattr__",
                 CallArguments::positional([Type::string_literal(db, name)]),
                 TypeContext::default(),
@@ -5829,6 +5862,7 @@ impl<'db> Type<'db> {
             // already model via the normal attribute-lookup path.
             self.try_call_dunder_with_policy(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__getattribute__",
                 &mut CallArguments::positional([Type::string_literal(db, name)]),
                 TypeContext::default(),
@@ -5918,6 +5952,7 @@ impl<'db> Type<'db> {
     fn try_await(self, db: &'db dyn Db) -> Result<Type<'db>, AwaitError<'db>> {
         let await_result = self.try_call_dunder(
             db,
+            crate::Program::get(db).python_version(db),
             "__await__",
             CallArguments::none(),
             TypeContext::default(),
@@ -6406,6 +6441,11 @@ impl<'db> Type<'db> {
     /// The type `NoneType` / `None`
     pub fn none(db: &'db dyn Db) -> Type<'db> {
         KnownClass::NoneType.to_instance(db)
+    }
+
+    /// The type `NoneType` / `None` for the given Python version.
+    pub fn none_with_version(db: &'db dyn Db, python_version: PythonVersion) -> Type<'db> {
+        KnownClass::NoneType.to_instance_with_version(db, python_version)
     }
 
     /// Given a type that is assumed to represent an instance of a class,
@@ -7596,13 +7636,21 @@ impl<'db> IntersectionType<'db> {
     fn try_call_dunder_with_policy(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         name: &str,
         argument_types: &mut CallArguments<'_, 'db>,
         tcx: TypeContext<'db>,
         policy: MemberLookupPolicy,
     ) -> Result<Bindings<'db>, CallDunderError<'db>> {
         if let Some(alternatives) = self.finite_alternative_union(db) {
-            return alternatives.try_call_dunder_with_policy(db, name, argument_types, tcx, policy);
+            return alternatives.try_call_dunder_with_policy(
+                db,
+                python_version,
+                name,
+                argument_types,
+                tcx,
+                policy,
+            );
         }
 
         // Using `positive()` rather than `positive_elements_or_object()` is safe
@@ -7615,7 +7663,14 @@ impl<'db> IntersectionType<'db> {
         let mut error_provenance = Provenance::Unknown;
 
         for element in positive {
-            match element.try_call_dunder_with_policy(db, name, argument_types, tcx, policy) {
+            match element.try_call_dunder_with_policy(
+                db,
+                python_version,
+                name,
+                argument_types,
+                tcx,
+                policy,
+            ) {
                 Ok(bindings) => successful_bindings.push(bindings),
                 Err(err) => {
                     error_provenance = error_provenance.or(err.provenance());
@@ -7649,6 +7704,7 @@ impl<'db> UnionType<'db> {
     fn try_call_dunder_with_policy(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         name: &str,
         argument_types: &mut CallArguments<'_, 'db>,
         tcx: TypeContext<'db>,
@@ -7704,9 +7760,9 @@ impl<'db> UnionType<'db> {
         let dunder_callable = builder.build();
         let constraints = ConstraintSetBuilder::new();
         let bindings = match dunder_callable
-            .bindings(db)
+            .bindings(db, python_version)
             .match_parameters(db, argument_types)
-            .check_types(db, &constraints, argument_types, tcx, &[])
+            .check_types(db, python_version, &constraints, argument_types, tcx, &[])
         {
             Ok(bindings) => bindings,
             Err(CallError(kind, bindings)) => {
@@ -8821,18 +8877,16 @@ impl<'db> ModuleLiteralType<'db> {
     fn try_module_getattr(self, db: &'db dyn Db, name: &str) -> PlaceAndQualifiers<'db> {
         // For module literals, we want to try calling the module's own `__getattr__` function
         // if it exists. First, we need to look up the `__getattr__` function in the module's scope.
-        if let Some(file) = self.module(db).python_file(db) {
-            let getattr_symbol = imported_symbol(
-                db,
-                Some(file),
-                self.module(db).python_version(db),
-                "__getattr__",
-                None,
-            );
+        let module = self.module(db);
+        if let Some(file) = module.python_file(db) {
+            let python_version = module.python_version(db);
+            let getattr_symbol =
+                imported_symbol(db, Some(file), python_version, "__getattr__", None);
             // If we found a __getattr__ function, try to call it with the name argument
             if let Place::Defined(place) = getattr_symbol.place
                 && let Ok(outcome) = place.ty.try_call(
                     db,
+                    python_version,
                     &CallArguments::positional([Type::string_literal(db, name)]),
                 )
             {

@@ -1,3 +1,5 @@
+use ruff_python_ast::PythonVersion;
+
 use super::{Binding, Bindings, CallableBinding, CallableItem, CheckTypesMode};
 use crate::db::Db;
 use crate::types::call::arguments::CallArguments;
@@ -83,13 +85,19 @@ impl<'db> ConstructorBinding<'db> {
     pub(super) fn check_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         argument_types: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
         mode: CheckTypesMode,
     ) {
-        self.entry
-            .check_types(db, constraints, argument_types, call_expression_tcx);
+        self.entry.check_types(
+            db,
+            python_version,
+            constraints,
+            argument_types,
+            call_expression_tcx,
+        );
 
         // Now that we've fully checked our own callable, we can determine whether downstream
         // constructors should be checked or not.
@@ -97,6 +105,7 @@ impl<'db> ConstructorBinding<'db> {
             if let Some(downstream) = self.downstream_constructor_mut() {
                 let _ = downstream.check_types_impl(
                     db,
+                    python_version,
                     constraints,
                     argument_types,
                     call_expression_tcx,
@@ -155,6 +164,7 @@ impl<'db> ConstructorBinding<'db> {
     pub(super) fn check_downstream_constructor(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         argument_types: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -165,6 +175,7 @@ impl<'db> ConstructorBinding<'db> {
             // `as_result` that ultimately matter.
             let _ = downstream.check_types_impl(
                 db,
+                python_version,
                 constraints,
                 argument_types,
                 call_expression_tcx,

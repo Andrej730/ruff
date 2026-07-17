@@ -849,6 +849,7 @@ impl<'db> Type<'db> {
         // See: https://docs.python.org/3/reference/datamodel.html#class-getitem-versus-getitem
         match value_ty.try_call_dunder(
             db,
+            crate::Program::get(db).python_version(db),
             "__getitem__",
             CallArguments::positional([slice_ty]),
             TypeContext::default(),
@@ -895,6 +896,7 @@ impl<'db> Type<'db> {
             let call_arguments = CallArguments::positional([slice_ty]);
             match value_ty.try_call_dunder_on_class(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__class_getitem__",
                 &call_arguments,
                 TypeContext::default(),

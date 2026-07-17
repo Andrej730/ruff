@@ -268,7 +268,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let mut call_arguments = self.prepare_call_arguments(&call_expr.arguments);
 
         let mut bindings = callable_type
-            .bindings(db)
+            .bindings(db, self.python_version())
             .match_parameters(db, &call_arguments);
         let bindings_result = self.infer_and_check_argument_types(
             ArgumentsIter::from_ast(&call_expr.arguments),

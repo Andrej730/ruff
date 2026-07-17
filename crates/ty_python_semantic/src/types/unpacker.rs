@@ -97,7 +97,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                     err.fallback_element_type(self.db())
                 }),
             UnpackKind::ContextManager { mode } => value_type
-                .try_enter_with_mode(self.db(), mode)
+                .try_enter_with_mode(self.db(), self.context.python_version(), mode)
                 .unwrap_or_else(|err| {
                     err.report_diagnostic(
                         &self.context,

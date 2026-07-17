@@ -891,6 +891,7 @@ fn infer_rich_comparison<'db>(
     let call_dunder = |op: RichCompareOperator, left: Type<'db>, right: Type<'db>| {
         left.try_call_dunder_with_policy(
             db,
+            context.python_version(),
             op.dunder(),
             &mut CallArguments::positional([right]),
             TypeContext::default(),
@@ -941,6 +942,7 @@ fn infer_membership_test_comparison<'db>(
     let db = context.db();
     let compare_result_opt = match right.try_call_dunder(
         db,
+        context.python_version(),
         "__contains__",
         CallArguments::positional([left]),
         TypeContext::default(),

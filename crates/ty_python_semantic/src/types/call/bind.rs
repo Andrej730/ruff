@@ -222,6 +222,7 @@ impl<'db> CallableItem<'db> {
     fn check_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         argument_types: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -229,10 +230,23 @@ impl<'db> CallableItem<'db> {
     ) {
         match self {
             CallableItem::Regular(binding) => {
-                binding.check_types(db, constraints, argument_types, call_expression_tcx);
+                binding.check_types(
+                    db,
+                    python_version,
+                    constraints,
+                    argument_types,
+                    call_expression_tcx,
+                );
             }
             CallableItem::Constructor(binding) => {
-                binding.check_types(db, constraints, argument_types, call_expression_tcx, mode);
+                binding.check_types(
+                    db,
+                    python_version,
+                    constraints,
+                    argument_types,
+                    call_expression_tcx,
+                    mode,
+                );
             }
         }
     }
@@ -401,13 +415,21 @@ impl<'db> BindingsElement<'db> {
     fn check_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         call_arguments: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
         mode: CheckTypesMode,
     ) {
         for item in &mut self.items {
-            item.check_types(db, constraints, call_arguments, call_expression_tcx, mode);
+            item.check_types(
+                db,
+                python_version,
+                constraints,
+                call_arguments,
+                call_expression_tcx,
+                mode,
+            );
         }
     }
 
@@ -953,17 +975,18 @@ impl<'db> Bindings<'db> {
     /// normalization) used by both inference and known-call evaluation.
     pub(crate) fn functools_partial_matched_bindings<'a>(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         wrapped_callable_ty: Type<'db>,
         call_arguments: &CallArguments<'a, 'db>,
     ) -> Option<(CallArguments<'a, 'db>, Bindings<'db>, bool)> {
         // We can only infer bound-argument context from an actual callable.
-        wrapped_callable_ty.try_upcast_to_callable(db)?;
+        wrapped_callable_ty.try_upcast_to_callable(db, python_version)?;
 
         let (bound_call_arguments, can_synthesize_signature) =
             call_arguments.functools_partial_bound_arguments(db)?;
 
         let mut partial_bindings = wrapped_callable_ty
-            .bindings(db)
+            .bindings(db, python_version)
             .match_parameters(db, &bound_call_arguments);
         for binding in partial_bindings.iter_flat_mut() {
             binding.clear_missing_argument_errors_for_partial_application();
@@ -1097,6 +1120,7 @@ impl<'db> Bindings<'db> {
     pub(crate) fn check_types(
         mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         call_arguments: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -1104,6 +1128,7 @@ impl<'db> Bindings<'db> {
     ) -> Result<Self, CallError<'db>> {
         match self.check_types_impl(
             db,
+            python_version,
             constraints,
             call_arguments,
             call_expression_tcx,
@@ -1115,9 +1140,11 @@ impl<'db> Bindings<'db> {
         }
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn check_types_impl(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         call_arguments: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -1126,7 +1153,14 @@ impl<'db> Bindings<'db> {
     ) -> Result<(), CallErrorKind> {
         // Check types for each element (union variant)
         for element in &mut self.elements {
-            element.check_types(db, constraints, call_arguments, call_expression_tcx, mode);
+            element.check_types(
+                db,
+                python_version,
+                constraints,
+                call_arguments,
+                call_expression_tcx,
+                mode,
+            );
         }
 
         // Generic call inference must maintain a stable set of overloads until the final round
@@ -1135,13 +1169,19 @@ impl<'db> Bindings<'db> {
             return Ok(());
         }
 
-        self.evaluate_known_cases(db, call_arguments, dataclass_field_specifiers);
+        self.evaluate_known_cases(
+            db,
+            python_version,
+            call_arguments,
+            dataclass_field_specifiers,
+        );
 
         // For constructor bindings with deferred downstream checks: validate downstream bindings
         // if the matched overload is instance-returning.
         for constructor in self.iter_constructor_items_mut() {
             constructor.check_downstream_constructor(
                 db,
+                python_version,
                 constraints,
                 call_arguments,
                 call_expression_tcx,
@@ -1163,10 +1203,16 @@ impl<'db> Bindings<'db> {
     pub(crate) fn finalize_argument_inference(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         call_arguments: &CallArguments<'_, 'db>,
         dataclass_field_specifiers: &[Type<'db>],
     ) -> Result<(), CallErrorKind> {
-        self.evaluate_known_cases(db, call_arguments, dataclass_field_specifiers);
+        self.evaluate_known_cases(
+            db,
+            python_version,
+            call_arguments,
+            dataclass_field_specifiers,
+        );
 
         for constructor in self.iter_constructor_items_mut() {
             if constructor.discard_downstream_constructor(db)
@@ -1174,6 +1220,7 @@ impl<'db> Bindings<'db> {
             {
                 let _ = downstream.finalize_argument_inference(
                     db,
+                    python_version,
                     call_arguments,
                     dataclass_field_specifiers,
                 );
@@ -1373,6 +1420,7 @@ impl<'db> Bindings<'db> {
     fn evaluate_known_cases(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         call_arguments: &CallArguments<'_, 'db>,
         dataclass_field_specifiers: &[Type<'db>],
     ) {
@@ -1502,7 +1550,9 @@ impl<'db> Bindings<'db> {
                                 }
                                 Some(getter) if getter.name(db) == "__bound__" => {
                                     overload.set_return_type(
-                                        typevar.upper_bound(db).unwrap_or_else(|| Type::none(db)),
+                                        typevar.upper_bound(db).unwrap_or_else(|| {
+                                            Type::none_with_version(db, python_version)
+                                        }),
                                     );
                                 }
                                 Some(getter) if getter.name(db) == "__constraints__" => {
@@ -1512,7 +1562,6 @@ impl<'db> Bindings<'db> {
                                     ));
                                 }
                                 Some(getter) if getter.name(db) == "__default__" => {
-                                    let python_version = getter.python_file(db).python_version(db);
                                     overload.set_return_type(
                                         typevar.default_type(db).unwrap_or_else(|| {
                                             KnownClass::NoDefaultType
@@ -1525,7 +1574,11 @@ impl<'db> Bindings<'db> {
                             [Some(Type::PropertyInstance(property)), Some(instance), ..] => {
                                 if let Some(getter) = property.getter(db) {
                                     if let Ok(return_ty) = getter
-                                        .try_call(db, &CallArguments::positional([*instance]))
+                                        .try_call(
+                                            db,
+                                            python_version,
+                                            &CallArguments::positional([*instance]),
+                                        )
                                         .map(|binding| binding.return_type(db))
                                     {
                                         overload.set_return_type(return_ty);
@@ -1554,7 +1607,11 @@ impl<'db> Bindings<'db> {
                             [Some(instance), ..] => {
                                 if let Some(getter) = property.getter(db) {
                                     if let Ok(return_ty) = getter
-                                        .try_call(db, &CallArguments::positional([*instance]))
+                                        .try_call(
+                                            db,
+                                            python_version,
+                                            &CallArguments::positional([*instance]),
+                                        )
                                         .map(|binding| binding.return_type(db))
                                     {
                                         overload.set_return_type(return_ty);
@@ -1585,7 +1642,11 @@ impl<'db> Bindings<'db> {
                         {
                             if let Some(setter) = property.setter(db) {
                                 if let Ok(return_ty) = setter
-                                    .try_call(db, &CallArguments::positional([*instance, *value]))
+                                    .try_call(
+                                        db,
+                                        python_version,
+                                        &CallArguments::positional([*instance, *value]),
+                                    )
                                     .map(|binding| binding.return_type(db))
                                 {
                                     // `property.__set__` returns `None` for ordinary setters, but
@@ -1593,7 +1654,7 @@ impl<'db> Bindings<'db> {
                                     overload.set_return_type(if return_ty.is_never() {
                                         return_ty
                                     } else {
-                                        Type::none(db)
+                                        Type::none_with_version(db, python_version)
                                     });
                                 } else {
                                     overload.errors.push(BindingError::InternalCallError(
@@ -1615,7 +1676,11 @@ impl<'db> Bindings<'db> {
                         {
                             if let Some(deleter) = property.deleter(db) {
                                 if let Ok(return_ty) = deleter
-                                    .try_call(db, &CallArguments::positional([*instance]))
+                                    .try_call(
+                                        db,
+                                        python_version,
+                                        &CallArguments::positional([*instance]),
+                                    )
                                     .map(|binding| binding.return_type(db))
                                 {
                                     // `property.__delete__` returns `None` for ordinary deleters,
@@ -1623,7 +1688,7 @@ impl<'db> Bindings<'db> {
                                     overload.set_return_type(if return_ty.is_never() {
                                         return_ty
                                     } else {
-                                        Type::none(db)
+                                        Type::none_with_version(db, python_version)
                                     });
                                 } else {
                                     overload.errors.push(BindingError::InternalCallError(
@@ -1643,7 +1708,11 @@ impl<'db> Bindings<'db> {
                         if let [Some(instance), Some(value), ..] = overload.parameter_types() {
                             if let Some(setter) = property.setter(db) {
                                 if let Ok(return_ty) = setter
-                                    .try_call(db, &CallArguments::positional([*instance, *value]))
+                                    .try_call(
+                                        db,
+                                        python_version,
+                                        &CallArguments::positional([*instance, *value]),
+                                    )
                                     .map(|binding| binding.return_type(db))
                                 {
                                     // `property.__set__` returns `None` for ordinary setters, but
@@ -1651,7 +1720,7 @@ impl<'db> Bindings<'db> {
                                     overload.set_return_type(if return_ty.is_never() {
                                         return_ty
                                     } else {
-                                        Type::none(db)
+                                        Type::none_with_version(db, python_version)
                                     });
                                 } else {
                                     overload.errors.push(BindingError::InternalCallError(
@@ -1673,7 +1742,11 @@ impl<'db> Bindings<'db> {
                         if let [Some(instance), ..] = overload.parameter_types() {
                             if let Some(deleter) = property.deleter(db) {
                                 if let Ok(return_ty) = deleter
-                                    .try_call(db, &CallArguments::positional([*instance]))
+                                    .try_call(
+                                        db,
+                                        python_version,
+                                        &CallArguments::positional([*instance]),
+                                    )
                                     .map(|binding| binding.return_type(db))
                                 {
                                     // `property.__delete__` returns `None` for ordinary deleters,
@@ -1681,7 +1754,7 @@ impl<'db> Bindings<'db> {
                                     overload.set_return_type(if return_ty.is_never() {
                                         return_ty
                                     } else {
-                                        Type::none(db)
+                                        Type::none_with_version(db, python_version)
                                     });
                                 } else {
                                     overload.errors.push(BindingError::InternalCallError(
@@ -1804,8 +1877,6 @@ impl<'db> Bindings<'db> {
                         if let Some(enum_instance) =
                             bound_method.self_instance(db).to_instance_approximation(db)
                         {
-                            let python_version =
-                                bound_method.function(db).python_file(db).python_version(db);
                             overload.set_return_type(
                                 KnownClass::Iterator.to_specialized_instance_with_version(
                                     db,
@@ -1880,9 +1951,7 @@ impl<'db> Bindings<'db> {
                             .map(|init| !init.bool(db).is_always_false())
                             .unwrap_or(true);
 
-                        let kw_only = if function_type.python_file(db).python_version(db)
-                            >= PythonVersion::PY310
-                        {
+                        let kw_only = if python_version >= PythonVersion::PY310 {
                             match kw_only.and_then(Type::as_literal_value_kind) {
                                 // We are more conservative here when turning the type for `kw_only`
                                 // into a bool, because a field specifier in a stub might use
@@ -1913,7 +1982,7 @@ impl<'db> Bindings<'db> {
                             let mut input_types = UnionBuilder::new(db);
                             let mut output_types = UnionBuilder::new(db);
                             let mut found_any = false;
-                            let bindings = converter_ty.bindings(db);
+                            let bindings = converter_ty.bindings(db, python_version);
                             // Note: `iter_callable_items` collapses the union/intersection
                             // structure. In principle, if the converter is a union of callables,
                             // we should only accept the intersection of all first parameter
@@ -2164,9 +2233,9 @@ impl<'db> Bindings<'db> {
                                     _ => generic_context_for_simple_type(*ty),
                                 };
 
-                                overload.set_return_type(
-                                    generic_context.unwrap_or_else(|| Type::none(db)),
-                                );
+                                overload.set_return_type(generic_context.unwrap_or_else(|| {
+                                    Type::none_with_version(db, python_version)
+                                }));
                             }
                         }
 
@@ -2177,13 +2246,16 @@ impl<'db> Bindings<'db> {
                             let [Some(ty)] = overload.parameter_types() else {
                                 continue;
                             };
-                            let Some(callables) = ty.try_upcast_to_callable(db).map(|callables| {
-                                if into_callable == KnownFunction::IntoRegularCallable {
-                                    callables.map(|callable| callable.into_regular(db))
-                                } else {
-                                    callables
-                                }
-                            }) else {
+                            let Some(callables) = ty
+                                .try_upcast_to_callable(db, python_version)
+                                .map(|callables| {
+                                    if into_callable == KnownFunction::IntoRegularCallable {
+                                        callables.map(|callable| callable.into_regular(db))
+                                    } else {
+                                        callables
+                                    }
+                                })
+                            else {
                                 continue;
                             };
                             overload.set_return_type(callables.into_type(db));
@@ -2209,10 +2281,10 @@ impl<'db> Bindings<'db> {
                                                     }),
                                                 )
                                             }
-                                            None => Type::none(db),
+                                            None => Type::none_with_version(db, python_version),
                                         }
                                     }
-                                    _ => Type::none(db),
+                                    _ => Type::none_with_version(db, python_version),
                                 });
                             }
                         }
@@ -2298,7 +2370,6 @@ impl<'db> Bindings<'db> {
                                         .members(db)
                                         .map(|member| Type::string_literal(db, member.name()));
                                     let specialization = UnionType::from_elements(db, member_names);
-                                    let python_version = class.python_file(db).python_version(db);
                                     overload.set_return_type(
                                         KnownClass::FrozenSet.to_specialized_instance_with_version(
                                             db,
@@ -2441,11 +2512,7 @@ impl<'db> Bindings<'db> {
                                     _ => {}
                                 }
 
-                                let params = DataclassParams::from_flags(
-                                    db,
-                                    function_type.python_file(db).python_version(db),
-                                    flags,
-                                );
+                                let params = DataclassParams::from_flags(db, python_version, flags);
 
                                 if cls_argument.is_none_or(|cls_ty| cls_ty.is_none(db)) {
                                     overload.set_return_type(Type::DataclassDecorator(params));
@@ -2557,7 +2624,6 @@ impl<'db> Bindings<'db> {
                                 continue;
                             };
 
-                            let python_version = function_type.python_file(db).python_version(db);
                             let return_type =
                                 parse_struct_format(db, python_version, format_literal.value(db))
                                     .map(|elements| Type::heterogeneous_tuple(db, elements))
@@ -2897,7 +2963,7 @@ impl<'db> Bindings<'db> {
                         Some(KnownClass::FunctoolsPartial) => {
                             if let Some(new_return_type) = overload.functools_partial_return_type(
                                 db,
-                                class.python_file(db).python_version(db),
+                                python_version,
                                 call_arguments,
                             ) {
                                 overload.set_return_type(new_return_type);
@@ -3365,6 +3431,7 @@ impl<'db> CallableBinding<'db> {
     fn check_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         call_arguments: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -3405,6 +3472,7 @@ impl<'db> CallableBinding<'db> {
                         if let [overload] = self.overloads.as_mut_slice() {
                             overload.check_types(
                                 db,
+                                python_version,
                                 constraints,
                                 call_arguments.as_ref(),
                                 call_expression_tcx,
@@ -3418,6 +3486,7 @@ impl<'db> CallableBinding<'db> {
                         self.matching_overload_before_type_checking = Some(index);
                         self.overloads[index].check_types(
                             db,
+                            python_version,
                             constraints,
                             call_arguments.as_ref(),
                             call_expression_tcx,
@@ -3433,6 +3502,7 @@ impl<'db> CallableBinding<'db> {
         for (_, overload) in self.matching_overloads_mut() {
             overload.check_types(
                 db,
+                python_version,
                 constraints,
                 call_arguments.as_ref(),
                 call_expression_tcx,
@@ -3605,7 +3675,13 @@ impl<'db> CallableBinding<'db> {
                 );
 
                 for (_, overload) in self.matching_overloads_mut() {
-                    overload.check_types(db, constraints, expanded_arguments, call_expression_tcx);
+                    overload.check_types(
+                        db,
+                        python_version,
+                        constraints,
+                        expanded_arguments,
+                        call_expression_tcx,
+                    );
                 }
 
                 tracing::trace!(
@@ -4947,6 +5023,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
 
 struct ArgumentTypeChecker<'a, 'db> {
     db: &'db dyn Db,
+    python_version: PythonVersion,
     signature_type: Type<'db>,
     signature: &'a Signature<'db>,
     arguments: &'a CallArguments<'a, 'db>,
@@ -4982,6 +5059,7 @@ enum KeywordUnpackKeyTypeCheck<'db> {
 /// Validate the key type of a keyword-unpack argument without checking its value type.
 fn validate_keyword_unpack_key_type<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     constraints: &ConstraintSetBuilder<'db>,
     argument_type: Type<'db>,
     inferable_typevars: InferableTypeVars<'db>,
@@ -4999,7 +5077,7 @@ fn validate_keyword_unpack_key_type<'db>(
     if key_type
         .when_assignable_to(
             db,
-            KnownClass::Str.to_instance(db),
+            KnownClass::Str.to_instance_with_version(db, python_version),
             constraints,
             inferable_typevars,
         )
@@ -5015,6 +5093,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
     #[expect(clippy::too_many_arguments)]
     fn new(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         signature_type: Type<'db>,
         signature: &'a Signature<'db>,
         arguments: &'a CallArguments<'a, 'db>,
@@ -5026,6 +5105,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
     ) -> Self {
         Self {
             db,
+            python_version,
             signature_type,
             signature,
             arguments,
@@ -5105,7 +5185,12 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         let return_with_tcx = Some(self.return_ty).zip(self.call_expression_tcx.annotation);
 
         self.inferable_typevars = generic_context.inferable_typevars(self.db);
-        let mut builder = SpecializationBuilder::new(self.db, constraints, self.inferable_typevars);
+        let mut builder = SpecializationBuilder::new(
+            self.db,
+            self.python_version,
+            constraints,
+            self.inferable_typevars,
+        );
 
         // Type variables for which we inferred a declared type based on a partially specialized
         // type from an outer generic context. For these type variables, we may infer types that
@@ -5259,7 +5344,12 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         // Note that this will still lead to an invalid specialization, but may
         // produce more precise diagnostics.
         if !assignable_to_declared_type {
-            builder = SpecializationBuilder::new(self.db, constraints, self.inferable_typevars);
+            builder = SpecializationBuilder::new(
+                self.db,
+                self.python_version,
+                constraints,
+                self.inferable_typevars,
+            );
             specialization_errors.clear();
 
             self.infer_argument_constraints(
@@ -5502,7 +5592,10 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         expected_type: Type<'db>,
         argument_type: Type<'db>,
     ) -> bool {
-        let Some(declared_callables) = declared_type.try_upcast_to_callable(self.db) else {
+        let python_version = self.python_version;
+        let Some(declared_callables) =
+            declared_type.try_upcast_to_callable(self.db, python_version)
+        else {
             return false;
         };
         let parameters_contain_typevartuple = declared_callables.iter().any(|callable| {
@@ -5521,7 +5614,9 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             return false;
         }
 
-        let Some(argument_callables) = argument_type.try_upcast_to_callable(self.db) else {
+        let Some(argument_callables) =
+            argument_type.try_upcast_to_callable(self.db, python_version)
+        else {
             return false;
         };
         if argument_callables
@@ -5539,7 +5634,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         });
         argument_is_generic
             && expected_type
-                .try_upcast_to_callable(self.db)
+                .try_upcast_to_callable(self.db, python_version)
                 .is_some_and(|callables| {
                     callables.iter().any(|callable| {
                         callable.signatures(self.db).iter().any(|signature| {
@@ -5714,6 +5809,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             .match_parameters(self.db, &sub_arguments)
             .check_types(
                 self.db,
+                self.python_version,
                 constraints,
                 &sub_arguments,
                 self.call_expression_tcx,
@@ -5825,6 +5921,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             } else {
                 match validate_keyword_unpack_key_type(
                     self.db,
+                    self.python_version,
                     constraints,
                     argument_type,
                     self.inferable_typevars,
@@ -6039,6 +6136,7 @@ pub(crate) struct UnknownParameterNameError;
 #[derive(Clone, Copy)]
 struct ParamSpecArgumentContext<'a, 'call, 'db> {
     db: &'db dyn Db,
+    python_version: PythonVersion,
     constraints: &'a ConstraintSetBuilder<'db>,
     binding: &'a CallableBinding<'db>,
     callable: CallableType<'db>,
@@ -6267,6 +6365,7 @@ impl<'db> Binding<'db> {
     ) -> Option<Type<'db>> {
         let ParamSpecArgumentContext {
             db,
+            python_version,
             constraints,
             binding,
             callable,
@@ -6295,6 +6394,7 @@ impl<'db> Binding<'db> {
             Bindings::from(specialized_binding).match_parameters(db, &sub_arguments);
         let _ = specialized_bindings.check_types_impl(
             db,
+            python_version,
             constraints,
             &sub_arguments,
             call_expression_tcx,
@@ -6344,6 +6444,7 @@ impl<'db> Binding<'db> {
     pub(crate) fn argument_type_context(
         &self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         binding: &CallableBinding<'db>,
         arguments_types: &CallArguments<'_, 'db>,
@@ -6406,6 +6507,7 @@ impl<'db> Binding<'db> {
                 && let Some(specialized_parameter_type) =
                     self.paramspec_argument_context(ParamSpecArgumentContext {
                         db,
+                        python_version,
                         constraints,
                         binding,
                         callable,
@@ -6574,6 +6676,7 @@ impl<'db> Binding<'db> {
     fn check_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         arguments: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
@@ -6592,12 +6695,13 @@ impl<'db> Binding<'db> {
                 .iter()
                 .all(|parameter| parameter.is_variadic() || parameter.is_keyword_variadic())
         {
-            self.check_keyword_unpack_key_types(db, constraints, arguments);
+            self.check_keyword_unpack_key_types(db, python_version, constraints, arguments);
             return;
         }
 
         let mut checker = ArgumentTypeChecker::new(
             db,
+            python_version,
             self.signature_type,
             &self.signature,
             arguments,
@@ -6619,6 +6723,7 @@ impl<'db> Binding<'db> {
     fn check_keyword_unpack_key_types(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &ConstraintSetBuilder<'db>,
         arguments: &CallArguments<'_, 'db>,
     ) {
@@ -6640,6 +6745,7 @@ impl<'db> Binding<'db> {
             if let KeywordUnpackKeyTypeCheck::Invalid(provided_ty) =
                 validate_keyword_unpack_key_type(
                     db,
+                    python_version,
                     constraints,
                     argument_type,
                     InferableTypeVars::None,
@@ -6685,12 +6791,18 @@ impl<'db> Binding<'db> {
             .to_specialized_instance_with_version(db, python_version, &[Type::unknown()]);
 
         let (bound_call_arguments, partial_bindings, can_synthesize_signature) =
-            Bindings::functools_partial_matched_bindings(db, func_ty, call_arguments)?;
+            Bindings::functools_partial_matched_bindings(
+                db,
+                python_version,
+                func_ty,
+                call_arguments,
+            )?;
 
         // Reuse call-binding machinery to resolve which wrapped overloads are compatible with
         // bound arguments and to surface binding diagnostics.
         let partial_bindings = match partial_bindings.check_types(
             db,
+            python_version,
             &ConstraintSetBuilder::new(),
             &bound_call_arguments,
             TypeContext::default(),

@@ -2205,7 +2205,11 @@ impl<'db> PatternSuccessAnalyzer<'db> {
         };
         Some(
             get_method
-                .try_call(self.db, &CallArguments::positional([key_ty, default_ty]))
+                .try_call(
+                    self.db,
+                    self.python_file.python_version(self.db),
+                    &CallArguments::positional([key_ty, default_ty]),
+                )
                 .map(|bindings| bindings.return_type(self.db))
                 .unwrap_or_else(|error| error.return_type(self.db)),
         )

@@ -1874,9 +1874,11 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
 
             (_, Type::Callable(target_callable)) => {
                 self.with_recursion_guard(source, target, || {
-                    let Some(callables) = source
-                        .try_upcast_to_callable_with_policy(db, UpcastPolicy::from(self.relation))
-                    else {
+                    let Some(callables) = source.try_upcast_to_callable_with_policy(
+                        db,
+                        crate::Program::get(db).python_version(db),
+                        UpcastPolicy::from(self.relation),
+                    ) else {
                         return self.never();
                     };
 

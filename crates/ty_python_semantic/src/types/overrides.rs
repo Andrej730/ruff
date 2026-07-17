@@ -559,7 +559,8 @@ fn check_class_declaration<'db>(
                 continue;
             }
 
-            let Some(superclass_type_as_callable) = superclass_type.try_upcast_to_callable(db)
+            let Some(superclass_type_as_callable) =
+                superclass_type.try_upcast_to_callable(db, context.python_version())
             else {
                 continue;
             };
@@ -1528,10 +1529,18 @@ fn check_enum_member_against_constructor_method<'db>(
     let call_args = call_args.with_self(Some(bound_self_type));
 
     let constraints = ConstraintSetBuilder::new();
+    let python_version = context.python_version();
     let result = Type::FunctionLiteral(function)
-        .bindings(db)
+        .bindings(db, python_version)
         .match_parameters(db, &call_args)
-        .check_types(db, &constraints, &call_args, TypeContext::default(), &[]);
+        .check_types(
+            db,
+            python_version,
+            &constraints,
+            &call_args,
+            TypeContext::default(),
+            &[],
+        );
 
     if result.is_err() {
         if let Some(builder) = context.report_lint(

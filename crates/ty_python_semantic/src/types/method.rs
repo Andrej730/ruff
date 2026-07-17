@@ -1,4 +1,5 @@
 use itertools::Either;
+use ruff_python_ast::PythonVersion;
 use ruff_python_ast::name::Name;
 
 use crate::{
@@ -306,7 +307,11 @@ impl<'db> KnownBoundMethodType<'db> {
     /// Return the signatures of this bound method type.
     ///
     /// If the bound method type is overloaded, it may have multiple signatures.
-    pub(super) fn signatures(self, db: &'db dyn Db) -> impl Iterator<Item = Signature<'db>> {
+    pub(super) fn signatures(
+        self,
+        db: &'db dyn Db,
+        python_version: PythonVersion,
+    ) -> impl Iterator<Item = Signature<'db>> {
         let object_type_form = || TypeFormType::from_type_expression(db, Type::object());
 
         match self {
@@ -335,9 +340,11 @@ impl<'db> KnownBoundMethodType<'db> {
                     Signature::new(
                         Parameters::standard([
                             Parameter::positional_only(Some(Name::new_static("instance")))
-                                .with_annotated_type(Type::none(db)),
+                                .with_annotated_type(Type::none_with_version(db, python_version)),
                             Parameter::positional_only(Some(Name::new_static("owner")))
-                                .with_annotated_type(KnownClass::Type.to_instance(db)),
+                                .with_annotated_type(
+                                    KnownClass::Type.to_instance_with_version(db, python_version),
+                                ),
                         ]),
                         Type::unknown(),
                     ),
@@ -348,10 +355,10 @@ impl<'db> KnownBoundMethodType<'db> {
                             Parameter::positional_only(Some(Name::new_static("owner")))
                                 .with_annotated_type(UnionType::from_two_elements(
                                     db,
-                                    KnownClass::Type.to_instance(db),
-                                    Type::none(db),
+                                    KnownClass::Type.to_instance_with_version(db, python_version),
+                                    Type::none_with_version(db, python_version),
                                 ))
-                                .with_default_type(Type::none(db)),
+                                .with_default_type(Type::none_with_version(db, python_version)),
                         ]),
                         Type::unknown(),
                     ),
@@ -387,25 +394,30 @@ impl<'db> KnownBoundMethodType<'db> {
                         Parameter::positional_only(Some(Name::new_static("prefix")))
                             .with_annotated_type(UnionType::from_two_elements(
                                 db,
-                                KnownClass::Str.to_instance(db),
-                                Type::homogeneous_tuple(db, KnownClass::Str.to_instance(db)),
+                                KnownClass::Str.to_instance_with_version(db, python_version),
+                                Type::homogeneous_tuple(
+                                    db,
+                                    KnownClass::Str.to_instance_with_version(db, python_version),
+                                ),
                             )),
                         Parameter::positional_only(Some(Name::new_static("start")))
                             .with_annotated_type(UnionType::from_two_elements(
                                 db,
-                                KnownClass::SupportsIndex.to_instance(db),
-                                Type::none(db),
+                                KnownClass::SupportsIndex
+                                    .to_instance_with_version(db, python_version),
+                                Type::none_with_version(db, python_version),
                             ))
-                            .with_default_type(Type::none(db)),
+                            .with_default_type(Type::none_with_version(db, python_version)),
                         Parameter::positional_only(Some(Name::new_static("end")))
                             .with_annotated_type(UnionType::from_two_elements(
                                 db,
-                                KnownClass::SupportsIndex.to_instance(db),
-                                Type::none(db),
+                                KnownClass::SupportsIndex
+                                    .to_instance_with_version(db, python_version),
+                                Type::none_with_version(db, python_version),
                             ))
-                            .with_default_type(Type::none(db)),
+                            .with_default_type(Type::none_with_version(db, python_version)),
                     ]),
-                    KnownClass::Bool.to_instance(db),
+                    KnownClass::Bool.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -419,7 +431,7 @@ impl<'db> KnownBoundMethodType<'db> {
                         Parameter::positional_only(Some(Name::new_static("upper_bound")))
                             .with_annotated_type(object_type_form()),
                     ]),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -427,7 +439,7 @@ impl<'db> KnownBoundMethodType<'db> {
             | KnownBoundMethodType::ConstraintSetNever => {
                 Either::Right(std::iter::once(Signature::new(
                     Parameters::empty(),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -439,7 +451,7 @@ impl<'db> KnownBoundMethodType<'db> {
                         Parameter::positional_only(Some(Name::new_static("of")))
                             .with_annotated_type(object_type_form()),
                     ]),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -448,8 +460,10 @@ impl<'db> KnownBoundMethodType<'db> {
                     Parameters::standard([Parameter::positional_only(Some(Name::new_static(
                         "other",
                     )))
-                    .with_annotated_type(KnownClass::ConstraintSet.to_instance(db))]),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    .with_annotated_type(
+                        KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
+                    )]),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -462,7 +476,7 @@ impl<'db> KnownBoundMethodType<'db> {
                         db,
                         Type::homogeneous_tuple(db, Type::object()),
                     ))]),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
 
@@ -475,17 +489,17 @@ impl<'db> KnownBoundMethodType<'db> {
                                 db,
                                 Type::homogeneous_tuple(db, Type::object()),
                             ),
-                            Type::none(db),
+                            Type::none_with_version(db, python_version),
                         ))
-                        .with_default_type(Type::none(db))]),
-                    KnownClass::Bool.to_instance(db),
+                        .with_default_type(Type::none_with_version(db, python_version))]),
+                    KnownClass::Bool.to_instance_with_version(db, python_version),
                 )))
             }
 
             KnownBoundMethodType::ConstraintSetWithDetailedDisplay(_) => {
                 Either::Right(std::iter::once(Signature::new(
                     Parameters::empty(),
-                    KnownClass::ConstraintSet.to_instance(db),
+                    KnownClass::ConstraintSet.to_instance_with_version(db, python_version),
                 )))
             }
         }
@@ -608,7 +622,11 @@ pub enum WrapperDescriptorKind {
 }
 
 impl WrapperDescriptorKind {
-    pub(super) fn signatures(self, db: &dyn Db) -> impl Iterator<Item = Signature<'_>> {
+    pub(super) fn signatures(
+        self,
+        db: &dyn Db,
+        python_version: PythonVersion,
+    ) -> impl Iterator<Item = Signature<'_>> {
         /// Similar to what we do in [`KnownBoundMethod::signatures`],
         /// here we also model `types.FunctionType.__get__` (or builtins.property.__get__),
         /// but now we consider a call to this as a function, i.e. we also expect the `self`
@@ -617,10 +635,14 @@ impl WrapperDescriptorKind {
         /// TODO: Consider merging these synthesized signatures with the ones in
         /// [`KnownBoundMethod::signatures`], since that one is just this signature
         /// with the `self` parameters removed.
-        fn dunder_get_signatures(db: &dyn Db, class: KnownClass) -> [Signature<'_>; 2] {
-            let type_instance = KnownClass::Type.to_instance(db);
-            let none = Type::none(db);
-            let descriptor = class.to_instance(db);
+        fn dunder_get_signatures(
+            db: &dyn Db,
+            python_version: PythonVersion,
+            class: KnownClass,
+        ) -> [Signature<'_>; 2] {
+            let type_instance = KnownClass::Type.to_instance_with_version(db, python_version);
+            let none = Type::none_with_version(db, python_version);
+            let descriptor = class.to_instance_with_version(db, python_version);
             [
                 Signature::new(
                     Parameters::standard([
@@ -653,18 +675,20 @@ impl WrapperDescriptorKind {
         }
 
         match self {
-            WrapperDescriptorKind::FunctionTypeDunderGet => {
-                Either::Left(dunder_get_signatures(db, KnownClass::FunctionType).into_iter())
-            }
-            WrapperDescriptorKind::PropertyDunderGet => {
-                Either::Left(dunder_get_signatures(db, KnownClass::Property).into_iter())
-            }
+            WrapperDescriptorKind::FunctionTypeDunderGet => Either::Left(
+                dunder_get_signatures(db, python_version, KnownClass::FunctionType).into_iter(),
+            ),
+            WrapperDescriptorKind::PropertyDunderGet => Either::Left(
+                dunder_get_signatures(db, python_version, KnownClass::Property).into_iter(),
+            ),
             WrapperDescriptorKind::PropertyDunderSet => {
                 let object = Type::object();
                 Either::Right(std::iter::once(Signature::new(
                     Parameters::standard([
                         Parameter::positional_only(Some(Name::new_static("self")))
-                            .with_annotated_type(KnownClass::Property.to_instance(db)),
+                            .with_annotated_type(
+                                KnownClass::Property.to_instance_with_version(db, python_version),
+                            ),
                         Parameter::positional_only(Some(Name::new_static("instance")))
                             .with_annotated_type(object),
                         Parameter::positional_only(Some(Name::new_static("value")))
@@ -677,7 +701,9 @@ impl WrapperDescriptorKind {
                 Either::Right(std::iter::once(Signature::new(
                     Parameters::standard([
                         Parameter::positional_only(Some(Name::new_static("self")))
-                            .with_annotated_type(KnownClass::Property.to_instance(db)),
+                            .with_annotated_type(
+                                KnownClass::Property.to_instance_with_version(db, python_version),
+                            ),
                         Parameter::positional_only(Some(Name::new_static("instance")))
                             .with_annotated_type(Type::object()),
                     ]),

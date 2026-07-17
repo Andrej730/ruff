@@ -205,7 +205,11 @@ fn divergent_type() {
         top_div.member(&db, "__class__").place.expect_type(),
         Type::object().dunder_class(&db)
     );
-    assert!(top_div.try_upcast_to_callable(&db).is_none());
+    assert!(
+        top_div
+            .try_upcast_to_callable(&db, crate::Program::get(&db).python_version(&db))
+            .is_none()
+    );
     assert!(
         top_div
             .subscript(&db, Type::int_literal(0), ast::ExprContext::Load)

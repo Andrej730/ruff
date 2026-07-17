@@ -267,6 +267,7 @@ impl<'db> Type<'db> {
                 iterator
                     .try_call_dunder(
                         db,
+                        crate::Program::get(db).python_version(db),
                         "__anext__",
                         CallArguments::none(),
                         TypeContext::default(),
@@ -276,6 +277,7 @@ impl<'db> Type<'db> {
 
             return match self.try_call_dunder(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__aiter__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -334,6 +336,7 @@ impl<'db> Type<'db> {
         let try_call_dunder_getitem = || {
             self.try_call_dunder(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__getitem__",
                 CallArguments::positional([KnownClass::Int.to_instance(db)]),
                 TypeContext::default(),
@@ -345,6 +348,7 @@ impl<'db> Type<'db> {
             iterator
                 .try_call_dunder(
                     db,
+                    crate::Program::get(db).python_version(db),
                     "__next__",
                     CallArguments::none(),
                     TypeContext::default(),
@@ -355,6 +359,7 @@ impl<'db> Type<'db> {
         let dunder_iter_result = self
             .try_call_dunder(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__iter__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -520,6 +525,7 @@ impl<'db> IterationError<'db> {
                 if mode.is_async() {
                     return_type(dunder_iter_bindings.return_type(db).try_call_dunder(
                         db,
+                        crate::Program::get(db).python_version(db),
                         "__anext__",
                         CallArguments::none(),
                         TypeContext::default(),
@@ -528,6 +534,7 @@ impl<'db> IterationError<'db> {
                 } else {
                     return_type(dunder_iter_bindings.return_type(db).try_call_dunder(
                         db,
+                        crate::Program::get(db).python_version(db),
                         "__next__",
                         CallArguments::none(),
                         TypeContext::default(),

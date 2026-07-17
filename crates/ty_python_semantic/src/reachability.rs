@@ -1300,7 +1300,7 @@ fn analyze_non_terminal_call<'db>(
     }
 
     let overloads_iterator = if let Some(callable) = ty
-        .try_upcast_to_callable(db)
+        .try_upcast_to_callable(db, callable.python_file(db).python_version(db))
         .and_then(CallableTypes::exactly_one)
     {
         callable.signatures(db).overloads.iter()

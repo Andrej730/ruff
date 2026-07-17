@@ -621,7 +621,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             Type::ClassLiteral(_) | Type::SubclassOf(_) | Type::GenericAlias(_)
         ));
 
-        let constructed_ty = meta_ty.bindings(db).return_type(db);
+        let constructed_ty = meta_ty
+            .bindings(db, crate::Program::get(db).python_version(db))
+            .return_type(db);
         self.check_type_pair(db, constructed_ty, Type::ProtocolInstance(protocol))
             .and(db, self.constraints, || {
                 self.check_meta_protocol_members(db, constructed_ty, meta_ty, protocol)

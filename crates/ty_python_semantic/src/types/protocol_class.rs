@@ -1476,7 +1476,9 @@ fn property_get_member_type<'db>(
 ) -> Option<ProtocolMemberType<'db>> {
     let mut get_types = Vec::new();
     let mut definition = None;
-    for callable in &getter.try_upcast_to_callable(db)? {
+    for callable in
+        &getter.try_upcast_to_callable(db, crate::Program::get(db).python_version(db))?
+    {
         for signature in callable.signatures(db) {
             get_types.push(signature.return_ty);
             definition = definition.or(signature.definition());
@@ -1494,7 +1496,9 @@ fn property_set_member_type<'db>(
 ) -> Option<ProtocolMemberType<'db>> {
     let mut set_types = Vec::new();
     let mut definition = None;
-    for callable in &setter.try_upcast_to_callable(db)? {
+    for callable in
+        &setter.try_upcast_to_callable(db, crate::Program::get(db).python_version(db))?
+    {
         for signature in callable.signatures(db) {
             set_types.push(signature.parameters().get_positional(1)?.annotated_type());
             definition = definition.or(signature.definition());
@@ -1608,7 +1612,9 @@ fn single_descriptor_setter_domain<'db>(
         return DescriptorSetterDomain::Missing;
     };
 
-    let Some(callables) = setter_ty.try_upcast_to_callable(db) else {
+    let Some(callables) =
+        setter_ty.try_upcast_to_callable(db, crate::Program::get(db).python_version(db))
+    else {
         return DescriptorSetterDomain::Deferred;
     };
     let mut callable_domains = Vec::with_capacity(callables.iter().len());
@@ -1884,6 +1890,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
     ) -> ConstraintSet<'db, 'c> {
         let setattr_result = object_ty.try_call_dunder_with_policy(
             db,
+            crate::Program::get(db).python_version(db),
             "__setattr__",
             &mut CallArguments::positional([Type::string_literal(db, member_name), value_ty]),
             TypeContext::default(),
@@ -1999,6 +2006,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         if setter_ty
             .try_call(
                 db,
+                crate::Program::get(db).python_version(db),
                 &CallArguments::positional([descriptor_ty, object_ty, Type::unknown()]),
             )
             .is_err()
@@ -2054,7 +2062,11 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         }
 
         callable_ty
-            .try_upcast_to_callable_with_policy(db, UpcastPolicy::from(self.relation))
+            .try_upcast_to_callable_with_policy(
+                db,
+                crate::Program::get(db).python_version(db),
+                UpcastPolicy::from(self.relation),
+            )
             .when_some_and(db, self.constraints, |callables| {
                 callables.iter().when_all(db, self.constraints, |callable| {
                     callable.signatures(db).into_iter().when_any(
@@ -2150,7 +2162,11 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 return self.never();
             };
             attribute_type
-                .try_upcast_to_callable_with_policy(db, UpcastPolicy::from(self.relation))
+                .try_upcast_to_callable_with_policy(
+                    db,
+                    crate::Program::get(db).python_version(db),
+                    UpcastPolicy::from(self.relation),
+                )
                 .when_some_and(db, self.constraints, |callables| {
                     self.check_callables_vs_callable(
                         db,
@@ -2176,7 +2192,11 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 return self.never();
             };
             attribute_type
-                .try_upcast_to_callable_with_policy(db, UpcastPolicy::from(self.relation))
+                .try_upcast_to_callable_with_policy(
+                    db,
+                    crate::Program::get(db).python_version(db),
+                    UpcastPolicy::from(self.relation),
+                )
                 .when_some_and(db, self.constraints, |callables| {
                     callables.iter().when_all(db, self.constraints, |callable| {
                         if callable.is_function_like(db) {
@@ -2654,8 +2674,11 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
                 return self.never();
             }
 
-            let Some(callables) = ty.try_upcast_to_callable_with_policy(db, UpcastPolicy::Sound)
-            else {
+            let Some(callables) = ty.try_upcast_to_callable_with_policy(
+                db,
+                crate::Program::get(db).python_version(db),
+                UpcastPolicy::Sound,
+            ) else {
                 return self.never();
             };
 

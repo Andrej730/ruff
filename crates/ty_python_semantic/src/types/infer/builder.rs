@@ -788,7 +788,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn bindings_for_call(&self, callable_type: Type<'db>) -> Bindings<'db> {
         let db = self.db();
         callable_type
-            .bindings(db)
+            .bindings(db, self.python_version())
             .with_enclosing_binding_contexts(enclosing_binding_contexts(
                 self.index,
                 self.scope().file_scope_id(db),
@@ -2222,7 +2222,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         context_expression_type
-            .try_enter_with_mode(self.db(), eval_mode)
+            .try_enter_with_mode(self.db(), self.python_version(), eval_mode)
             .unwrap_or_else(|err| {
                 err.report_diagnostic(
                     &self.context,
@@ -2858,7 +2858,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         property_ty.as_property_instance().is_some_and(|property| {
             property.deleter(db).is_some_and(|deleter| {
-                match deleter.try_call(db, &CallArguments::positional([object_ty])) {
+                match deleter.try_call(
+                    db,
+                    self.python_version(),
+                    &CallArguments::positional([object_ty]),
+                ) {
                     Ok(result) => result.return_type(db).is_never(),
                     Err(err) => err.return_type(db).is_never(),
                 }
@@ -2947,6 +2951,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             | Type::NewTypeInstance(_) => {
                 let delattr_dunder_call_result = object_ty.try_call_dunder_with_policy(
                     db,
+                    self.python_version(),
                     "__delattr__",
                     &mut CallArguments::positional([Type::string_literal(db, attribute)]),
                     TypeContext::default(),
@@ -3020,6 +3025,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let attr_ty = attr_ty.bind_self_typevars(db, object_ty);
                     let delete_dunder_call_result = attr_ty.try_call_dunder(
                         db,
+                        self.python_version(),
                         "__delete__",
                         CallArguments::positional([object_ty]),
                         TypeContext::default(),
@@ -4881,7 +4887,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let decorated_ty =
             self.get_or_infer_expression(decorated_expression, TypeContext::default());
         let call_arguments = CallArguments::positional([decorated_ty]);
-        let Ok(bindings) = decorator_ty.try_call(self.db(), &call_arguments) else {
+        let Ok(bindings) = decorator_ty.try_call(self.db(), self.python_version(), &call_arguments)
+        else {
             return return_ty;
         };
 
@@ -4965,7 +4972,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ),
             )),
             _ => decorated_ty
-                .try_upcast_to_callable(self.db())
+                .try_upcast_to_callable(self.db(), self.python_version())
                 .and_then(CallableTypes::exactly_one)
                 .and_then(|callable| match callable.kind(self.db()) {
                     kind @ (CallableTypeKind::FunctionLike
@@ -4979,7 +4986,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let call_arguments = CallArguments::positional([decorated_ty]);
         let (return_ty, decorator_bindings) =
-            match decorator_ty.try_call(self.db(), &call_arguments) {
+            match decorator_ty.try_call(self.db(), self.python_version(), &call_arguments) {
                 Ok(bindings) => (bindings.return_type(self.db()), Some(bindings)),
                 Err(CallError(_, bindings)) => {
                     bindings.report_diagnostics(&self.context, decorator_node.into());
@@ -5309,6 +5316,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             return bindings.check_types_impl(
                 self.db(),
+                self.python_version(),
                 constraints,
                 argument_types,
                 call_expression_tcx,
@@ -5332,6 +5340,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let result = bindings.check_types_impl(
             self.db(),
+            self.python_version(),
             constraints,
             argument_types,
             call_expression_tcx,
@@ -5426,6 +5435,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             next_bindings = bindings.clone();
             let _ = next_bindings.check_types_impl(
                 db,
+                self.python_version(),
                 constraints,
                 &next_argument_types,
                 call_expression_tcx,
@@ -5466,6 +5476,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Discard any non-matching constructors overloads now that the inferred types have converged.
         let result = next_bindings.finalize_argument_inference(
             db,
+            self.python_version(),
             &converged_argument_types,
             &self.dataclass_field_specifiers,
         );
@@ -5584,6 +5595,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     |overload: &Binding<'db>, binding: &CallableBinding<'db>, specialization| {
                         overload.argument_type_context(
                             db,
+                            self.python_version(),
                             constraints,
                             binding,
                             argument_types,
@@ -6102,7 +6114,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(class_generic_context) = class.generic_context(db) else {
             return ty;
         };
-        let Some(source_callable) = ty.try_upcast_to_callable(db) else {
+        let Some(source_callable) = ty.try_upcast_to_callable(db, self.python_version()) else {
             return ty;
         };
         // The callable relation existentially solves variables bound by each signature. Keep
@@ -6880,7 +6892,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let constraints = ConstraintSetBuilder::new();
         let inferable = generic_context.inferable_typevars(self.db());
         let identity_instance = Type::instance(self.db(), ClassType::Generic(collection_alias));
-        let mut builder = SpecializationBuilder::new(self.db(), &constraints, inferable);
+        let mut builder =
+            SpecializationBuilder::new(self.db(), self.python_version(), &constraints, inferable);
 
         // Remove any union elements of that are unrelated to the collection type.
         //
@@ -8877,7 +8890,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 let mut identity_bindings = self
                     .infer_attribute_load_impl(attribute, identity_instance)
-                    .bindings(self.db())
+                    .bindings(self.db(), self.python_version())
                     .match_parameters(self.db(), &call_arguments)
                     // Perform inference against the type variables on the receiver's generic context.
                     .with_generic_context(self.db(), collection_generic_context);
@@ -10335,6 +10348,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             match operand_type.try_call_dunder(
                 self.db(),
+                self.python_version(),
                 unary_dunder_method,
                 CallArguments::none(),
                 TypeContext::default(),
@@ -10432,6 +10446,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 constraint
                                     .try_call_dunder(
                                         db,
+                                        self.python_version(),
                                         unary_dunder_method,
                                         CallArguments::none(),
                                         TypeContext::default(),
@@ -10453,6 +10468,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 operand_type
                                     .try_call_dunder(
                                         db,
+                                        self.python_version(),
                                         unary_dunder_method,
                                         CallArguments::none(),
                                         TypeContext::default(),
@@ -10472,6 +10488,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // For unconstrained TypeVars, fall through to default handling.
                     None => match operand_type.try_call_dunder(
                         self.db(),
+                        self.python_version(),
                         unary_dunder_method,
                         CallArguments::none(),
                         TypeContext::default(),

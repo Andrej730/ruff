@@ -5,7 +5,7 @@ use crate::{
         context::InferContext, diagnostic::INVALID_CONTEXT_MANAGER,
     },
 };
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 use ty_python_core::EvaluationMode;
 
 impl<'db> Type<'db> {
@@ -14,8 +14,12 @@ impl<'db> Type<'db> {
     /// This method should only be used outside of type checking because it omits any errors.
     /// For type checking, use [`try_enter_with_mode`](Self::try_enter_with_mode) instead.
     pub(super) fn enter(self, db: &'db dyn Db) -> Type<'db> {
-        self.try_enter_with_mode(db, EvaluationMode::Sync)
-            .unwrap_or_else(|err| err.fallback_enter_type(db))
+        self.try_enter_with_mode(
+            db,
+            crate::Program::get(db).python_version(db),
+            EvaluationMode::Sync,
+        )
+        .unwrap_or_else(|err| err.fallback_enter_type(db))
     }
 
     /// Returns the type bound from a context manager with type `self`.
@@ -23,8 +27,12 @@ impl<'db> Type<'db> {
     /// This method should only be used outside of type checking because it omits any errors.
     /// For type checking, use [`try_enter_with_mode`](Self::try_enter_with_mode) instead.
     pub(super) fn aenter(self, db: &'db dyn Db) -> Type<'db> {
-        self.try_enter_with_mode(db, EvaluationMode::Async)
-            .unwrap_or_else(|err| err.fallback_enter_type(db))
+        self.try_enter_with_mode(
+            db,
+            crate::Program::get(db).python_version(db),
+            EvaluationMode::Async,
+        )
+        .unwrap_or_else(|err| err.fallback_enter_type(db))
     }
 
     /// Given the type of an object that is used as a context manager (i.e. in a `with` statement),
@@ -38,6 +46,7 @@ impl<'db> Type<'db> {
     pub(super) fn try_enter_with_mode(
         self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         mode: EvaluationMode,
     ) -> Result<Type<'db>, ContextManagerError<'db>> {
         let (enter_method, exit_method) = match mode {
@@ -47,14 +56,20 @@ impl<'db> Type<'db> {
 
         let enter = self.try_call_dunder(
             db,
+            python_version,
             enter_method,
             CallArguments::none(),
             TypeContext::default(),
         );
         let exit = self.try_call_dunder(
             db,
+            python_version,
             exit_method,
-            CallArguments::positional([Type::none(db), Type::none(db), Type::none(db)]),
+            CallArguments::positional([
+                Type::none_with_version(db, python_version),
+                Type::none_with_version(db, python_version),
+                Type::none_with_version(db, python_version),
+            ]),
             TypeContext::default(),
         );
 
@@ -293,12 +308,14 @@ impl<'db> ContextManagerError<'db> {
 
         let alt_enter = context_expression_type.try_call_dunder(
             db,
+            context.python_version(),
             alt_enter_method,
             CallArguments::none(),
             TypeContext::default(),
         );
         let alt_exit = context_expression_type.try_call_dunder(
             db,
+            context.python_version(),
             alt_exit_method,
             CallArguments::positional([Type::unknown(), Type::unknown(), Type::unknown()]),
             TypeContext::default(),

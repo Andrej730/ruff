@@ -7,6 +7,7 @@
 //! diagnostics, while protocol checking can evaluate the same lookup result using its active type
 //! relation and constraint set.
 
+use ruff_python_ast::PythonVersion;
 use ty_module_resolver::KnownModule;
 
 use super::call::CallArguments;
@@ -585,13 +586,18 @@ fn effective_write_type<'db>(
 /// ```
 pub(super) fn property_setter_returns_never<'db>(
     db: &'db dyn Db,
+    python_version: PythonVersion,
     property_ty: Type<'db>,
     object_ty: Type<'db>,
     value_ty: Type<'db>,
 ) -> bool {
     property_ty.as_property_instance().is_some_and(|property| {
         property.setter(db).is_some_and(|setter| {
-            match setter.try_call(db, &CallArguments::positional([object_ty, value_ty])) {
+            match setter.try_call(
+                db,
+                python_version,
+                &CallArguments::positional([object_ty, value_ty]),
+            ) {
                 Ok(result) => result.return_type(db).is_never(),
                 Err(error) => error.return_type(db).is_never(),
             }

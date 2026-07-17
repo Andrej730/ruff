@@ -63,6 +63,7 @@ impl<'db> Type<'db> {
         let try_dunders = || {
             match self.try_call_dunder(
                 db,
+                crate::Program::get(db).python_version(db),
                 "__bool__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -112,6 +113,7 @@ impl<'db> Type<'db> {
                         } else if instance.class(db).is_final(db) {
                             match self.try_call_dunder(
                                 db,
+                                crate::Program::get(db).python_version(db),
                                 "__len__",
                                 CallArguments::none(),
                                 TypeContext::default(),

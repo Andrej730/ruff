@@ -4,7 +4,7 @@ use std::collections::hash_map::Entry;
 use std::fmt::Display;
 
 use itertools::{Either, Itertools};
-use ruff_python_ast as ast;
+use ruff_python_ast::{self as ast, PythonVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::callable::walk_callable_type;
@@ -2030,6 +2030,7 @@ impl<'db> Type<'db> {
 /// specialization of a generic function.
 pub(crate) struct SpecializationBuilder<'db, 'c> {
     db: &'db dyn Db,
+    python_version: PythonVersion,
     constraints: &'c ConstraintSetBuilder<'db>,
     inferable: InferableTypeVars<'db>,
     pending: ConstraintSet<'db, 'c>,
@@ -2090,11 +2091,13 @@ impl<'db> TypeVarInference<'db> {
 impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     pub(crate) fn new(
         db: &'db dyn Db,
+        python_version: PythonVersion,
         constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'db>,
     ) -> Self {
         Self {
             db,
+            python_version,
             constraints,
             inferable,
             pending: ConstraintSet::from_bool(constraints, true),
@@ -3091,7 +3094,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                     for element in union.elements(self.db) {
                         self.infer_map_impl(
                             formal_protocol,
-                            element.bindings(self.db).return_type(self.db),
+                            element
+                                .bindings(self.db, self.python_version)
+                                .return_type(self.db),
                             polarity,
                             seen,
                         )?;
@@ -3100,7 +3105,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 }
                 return self.infer_map_impl(
                     formal_protocol,
-                    actual.bindings(self.db).return_type(self.db),
+                    actual
+                        .bindings(self.db, self.python_version)
+                        .return_type(self.db),
                     polarity,
                     seen,
                 );
@@ -3328,7 +3335,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 else {
                     return Ok(());
                 };
-                let Some(actual_callables) = actual.try_upcast_to_callable(self.db) else {
+                let Some(actual_callables) =
+                    actual.try_upcast_to_callable(self.db, self.python_version)
+                else {
                     return Ok(());
                 };
 
@@ -3344,7 +3353,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             }
 
             (Type::Callable(formal_callable), _) => {
-                let Some(actual_callables) = actual.try_upcast_to_callable(self.db) else {
+                let Some(actual_callables) =
+                    actual.try_upcast_to_callable(self.db, self.python_version)
+                else {
                     return Ok(());
                 };
                 let formal_signature = formal_callable.signatures(self.db);

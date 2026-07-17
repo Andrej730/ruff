@@ -12,7 +12,7 @@ use crate::types::{
     },
     special_form::TypeQualifier,
 };
-use ruff_python_ast::{self as ast, helpers::any_over_expr};
+use ruff_python_ast::{self as ast, PythonVersion, helpers::any_over_expr};
 use ty_module_resolver::{KnownModule, file_to_module};
 use ty_python_core::{definition::Definition, scope::NodeWithScopeRef};
 
@@ -274,7 +274,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 dataclass_transformer_params,
                 total_ordering,
             );
-            let decorator_result = apply_class_decorator(db, decorator_ty, original_class_ty);
+            let decorator_result =
+                apply_class_decorator(db, self.python_version(), decorator_ty, original_class_ty);
             let decorated_ty = match &decorator_result {
                 Ok(return_ty) => *return_ty,
                 Err(error) => error.return_type(db),
@@ -322,7 +323,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 {
                     decorator_result
                 }
-                _ => apply_class_decorator(db, decorator_ty, inferred_ty),
+                _ => apply_class_decorator(db, self.python_version(), decorator_ty, inferred_ty),
             };
             let decorated_ty = match decorator_result {
                 Ok(return_ty) => return_ty,
@@ -450,12 +451,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
 fn apply_class_decorator<'db>(
     db: &'db dyn crate::Db,
+    python_version: PythonVersion,
     decorator_ty: Type<'db>,
     decorated_ty: Type<'db>,
 ) -> Result<Type<'db>, CallError<'db>> {
     let call_arguments = CallArguments::positional([decorated_ty]);
     decorator_ty
-        .try_call(db, &call_arguments)
+        .try_call(db, python_version, &call_arguments)
         .map(|bindings| bindings.return_type(db))
 }
 

@@ -29,9 +29,7 @@ pub(crate) fn singleton_pattern_type<'db>(
     singleton: ast::Singleton,
 ) -> Type<'db> {
     let ty = match singleton {
-        ast::Singleton::None => {
-            KnownClass::NoneType.to_instance_with_version(db, python_file.python_version(db))
-        }
+        ast::Singleton::None => Type::none_with_version(db, python_file.python_version(db)),
         ast::Singleton::True => Type::bool_literal(true),
         ast::Singleton::False => Type::bool_literal(false),
     };

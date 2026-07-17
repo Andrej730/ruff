@@ -719,7 +719,9 @@ pub(crate) fn check_static_class_definitions<'db>(
 
             if let Some(init_subclass) = init_subclass_type {
                 let call_args = call_args.with_self(Some(Type::from(class)));
-                if let Err(call_error) = init_subclass.try_call(db, &call_args) {
+                if let Err(call_error) =
+                    init_subclass.try_call(db, context.python_version(), &call_args)
+                {
                     report_subclass_of_class_with_non_callable_init_subclass(
                         context, call_error, class, class_node,
                     );
@@ -1334,7 +1336,7 @@ fn check_final_class_abstract_methods<'db>(
         if kind.is_implicit_due_to_stub_body() && db.should_check_file(definition.file(db)) {
             let function_type_as_callable = infer_definition_types(db, *definition)
                 .binding_type(*definition)
-                .try_upcast_to_callable(db);
+                .try_upcast_to_callable(db, context.python_version());
 
             if let Some(callables) = function_type_as_callable
                 && Type::function_like_callable(

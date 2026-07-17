@@ -497,7 +497,7 @@ pub fn definitions_for_keyword_argument<'db>(
     let mut resolved_definitions = Vec::new();
 
     if let Some(callable_type) = func_type
-        .try_upcast_to_callable(db)
+        .try_upcast_to_callable(db, model.python_file().python_version(db))
         .and_then(CallableTypes::exactly_one)
     {
         let signatures = callable_type.signatures(db);
@@ -753,8 +753,9 @@ pub fn call_signature_details<'db>(
     let db = model.db();
 
     // Use into_callable to handle all the complex type conversions
+    let python_version = model.python_file().python_version(db);
     if let Some(callable_type) = func_type
-        .try_upcast_to_callable(db)
+        .try_upcast_to_callable(db, python_version)
         .map(|callables| callables.into_type(db))
     {
         // Use from_arguments_typed so that check_types can infer TypeVar
@@ -766,7 +767,7 @@ pub fn call_signature_details<'db>(
                     .unwrap_or(Type::unknown())
             });
         let mut bindings = callable_type
-            .bindings(db)
+            .bindings(db, python_version)
             .match_parameters(db, &call_arguments);
 
         // Run type checking to resolve TypeVar bindings from argument types.
@@ -776,6 +777,7 @@ pub fn call_signature_details<'db>(
         let constraints = ConstraintSetBuilder::new();
         let _ = bindings.check_types_impl(
             db,
+            python_version,
             &constraints,
             &call_arguments,
             TypeContext::default(),
@@ -803,7 +805,8 @@ fn resolve_single_overload<'db>(
     call_expr: &ast::ExprCall,
 ) -> Option<Signature<'db>> {
     let db = model.db();
-    let bindings = callable_type.bindings(db);
+    let python_version = model.python_file().python_version(db);
+    let bindings = callable_type.bindings(db, python_version);
 
     let args = CallArguments::from_arguments_typed(&call_expr.arguments, |splatted_value| {
         splatted_value
@@ -814,7 +817,14 @@ fn resolve_single_overload<'db>(
     let constraints = ConstraintSetBuilder::new();
     let mut resolved: Vec<_> = bindings
         .match_parameters(db, &args)
-        .check_types(db, &constraints, &args, TypeContext::default(), &[])
+        .check_types(
+            db,
+            python_version,
+            &constraints,
+            &args,
+            TypeContext::default(),
+            &[],
+        )
         .iter()
         .flat_map(super::call::bind::Bindings::iter_flat)
         .flat_map(|binding| {
@@ -850,6 +860,7 @@ fn full_type_bindings_for_call<'db>(
     call_expr: &ast::ExprCall,
 ) -> crate::types::call::Bindings<'db> {
     let db = model.db();
+    let python_version = model.python_file().python_version(db);
     let call_arguments =
         CallArguments::from_arguments_typed(&call_expr.arguments, |splatted_value| {
             splatted_value
@@ -859,10 +870,11 @@ fn full_type_bindings_for_call<'db>(
     let constraints = ConstraintSetBuilder::new();
 
     func_type
-        .bindings(db)
+        .bindings(db, python_version)
         .match_parameters(db, &call_arguments)
         .check_types(
             db,
+            python_version,
             &constraints,
             &call_arguments,
             TypeContext::default(),
@@ -928,7 +940,7 @@ pub fn call_argument_forms(
 
     // Ordinary callables have only value-form arguments for IDE purposes, so skip full binding.
     if !func_type
-        .bindings(db)
+        .bindings(db, model.python_file().python_version(db))
         .iter_flat()
         .any(|binding| known_type_form_parameter_index(db, binding.callable_type).is_some())
     {
@@ -1000,10 +1012,13 @@ pub fn call_type_simplified_by_overloads(
     let db = model.db();
     let func_type = call_expr.func.inferred_type(model)?;
 
-    let callable_type = func_type.try_upcast_to_callable(db)?.into_type(db);
+    let python_version = model.python_file().python_version(db);
+    let callable_type = func_type
+        .try_upcast_to_callable(db, python_version)?
+        .into_type(db);
 
     // If the callable is trivial this analysis is useless, bail out
-    if let Some(binding) = callable_type.bindings(db).single_element()
+    if let Some(binding) = callable_type.bindings(db, python_version).single_element()
         && binding.overloads().len() < 2
     {
         return None;
@@ -1060,6 +1075,7 @@ pub fn definitions_for_unary_op<'db>(
 
     let bindings = match operand_ty.try_call_dunder(
         model.db(),
+        model.python_file().python_version(model.db()),
         unary_dunder_method,
         CallArguments::none(),
         TypeContext::default(),
@@ -1069,6 +1085,7 @@ pub fn definitions_for_unary_op<'db>(
             // The runtime falls back to `__len__` for `not` if `__bool__` is not defined.
             match operand_ty.try_call_dunder(
                 model.db(),
+                model.python_file().python_version(model.db()),
                 "__len__",
                 CallArguments::none(),
                 TypeContext::default(),
@@ -1172,7 +1189,10 @@ pub fn resolved_call_signature<'db>(
 ) -> Option<CallSignatureDetails<'db>> {
     let db = model.db();
     let func_type = call_expr.func.inferred_type(model)?;
-    let callable_type = func_type.try_upcast_to_callable(db)?.into_type(db);
+    let python_version = model.python_file().python_version(db);
+    let callable_type = func_type
+        .try_upcast_to_callable(db, python_version)?
+        .into_type(db);
 
     let args = CallArguments::from_arguments_typed(&call_expr.arguments, |splatted_value| {
         splatted_value
@@ -1183,9 +1203,16 @@ pub fn resolved_call_signature<'db>(
     // Extract the `Bindings` regardless of whether type checking succeeded or failed.
     let constraints = ConstraintSetBuilder::new();
     let bindings = callable_type
-        .bindings(db)
+        .bindings(db, python_version)
         .match_parameters(db, &args)
-        .check_types(db, &constraints, &args, TypeContext::default(), &[])
+        .check_types(
+            db,
+            python_version,
+            &constraints,
+            &args,
+            TypeContext::default(),
+            &[],
+        )
         .unwrap_or_else(|CallError(_, bindings)| *bindings);
 
     // First, try to find the matching overload after full type checking.
@@ -2208,8 +2235,11 @@ pub fn constructor_signature(model: &SemanticModel, call_expr: &ast::ExprCall) -
 
         format!("class {class_name}{params}")
     };
-    let callable_type = function_ty.try_upcast_to_callable(db)?.into_type(db);
-    let bindings = callable_type.bindings(db);
+    let python_version = model.python_file().python_version(db);
+    let callable_type = function_ty
+        .try_upcast_to_callable(db, python_version)?
+        .into_type(db);
+    let bindings = callable_type.bindings(db, python_version);
 
     if let Some(binding) = bindings.single_element()
         && binding.overloads().len() == 1

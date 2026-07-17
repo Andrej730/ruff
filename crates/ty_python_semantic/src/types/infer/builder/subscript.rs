@@ -1561,7 +1561,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .place
             {
                 let mut identity_bindings = dunder_callable
-                    .bindings(db)
+                    .bindings(db, self.python_version())
                     .match_parameters(db, &call_arguments)
                     // Perform inference against the type variables on the receiver's generic context.
                     .with_generic_context(db, collection_generic_context);
@@ -2116,6 +2116,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 match object_ty.try_call_dunder(
                     db,
+                    self.python_version(),
                     "__delitem__",
                     CallArguments::positional([slice_ty]),
                     TypeContext::default(),
@@ -2259,6 +2260,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         object_ty
             .try_call_dunder(
                 db,
+                self.python_version(),
                 "__delitem__",
                 CallArguments::positional([slice_ty]),
                 TypeContext::default(),
