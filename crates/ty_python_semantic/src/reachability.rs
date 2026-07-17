@@ -208,6 +208,7 @@ use crate::{
         singleton_pattern_type,
     },
 };
+use ruff_db::PythonFile;
 use ruff_index::{Idx, IndexSlice};
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -278,7 +279,12 @@ fn type_narrowed_by_pattern<'db>(
     predicate: PatternPredicate<'db>,
     subject_ty: Type<'db>,
 ) -> Type<'db> {
-    pattern_binding_fallthrough_type(db, predicate.kind(db), subject_ty)
+    pattern_binding_fallthrough_type(
+        db,
+        predicate.python_file(db),
+        predicate.kind(db),
+        subject_ty,
+    )
 }
 
 /// Return the enum class and canonical member names represented by an enum-literal subject type.
@@ -342,7 +348,8 @@ fn enum_member_pattern_name<'db>(
     enum_class: EnumClassLiteral<'db>,
     kind: &PatternPredicateKind<'db>,
 ) -> Option<Name> {
-    let value_ty = definite_match_pattern_type(db, kind);
+    let python_file = enum_class.class_literal(db).python_file(db);
+    let value_ty = definite_match_pattern_type(db, python_file, kind);
     let enum_literal = value_ty.as_enum_literal()?;
     if enum_literal.enum_class_literal(db) != enum_class {
         return None;
@@ -497,8 +504,13 @@ fn analyze_pattern_predicate<'db>(db: &'db dyn Db, predicate: PatternPredicate<'
         return Truthiness::AlwaysTrue;
     }
 
-    let truthiness =
-        analyze_single_pattern_predicate_kind(db, predicate.kind(db), narrowed_subject_ty, None);
+    let truthiness = analyze_single_pattern_predicate_kind(
+        db,
+        predicate.python_file(db),
+        predicate.kind(db),
+        narrowed_subject_ty,
+        None,
+    );
 
     if truthiness == Truthiness::AlwaysTrue && predicate.guard(db).is_some() {
         // Fall back to ambiguous, the guard might change the result.
@@ -1112,6 +1124,7 @@ impl<'db> ProjectedNarrowingContext<'_, 'db> {
 
 fn analyze_single_pattern_predicate_kind<'db>(
     db: &'db dyn Db,
+    python_file: PythonFile<'db>,
     predicate_kind: &PatternPredicateKind<'db>,
     subject_ty: Type<'db>,
     precomputed_definite_match_ty: Option<Type<'db>>,
@@ -1127,7 +1140,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
             }
         }
         PatternPredicateKind::Singleton(singleton) => {
-            let singleton_ty = singleton_pattern_type(db, *singleton);
+            let singleton_ty = singleton_pattern_type(db, python_file, *singleton);
 
             if subject_ty.is_equivalent_to(db, singleton_ty) {
                 Truthiness::AlwaysTrue
@@ -1146,14 +1159,19 @@ fn analyze_single_pattern_predicate_kind<'db>(
                 .map(|p| {
                     let narrowed_subject_ty = remaining_subject_ty;
 
-                    let definitely_matched =
-                        definite_match_pattern_type_for_subject(db, p, narrowed_subject_ty);
+                    let definitely_matched = definite_match_pattern_type_for_subject(
+                        db,
+                        python_file,
+                        p,
+                        narrowed_subject_ty,
+                    );
 
                     let truthiness = if narrowed_subject_ty.is_subtype_of(db, definitely_matched) {
                         Truthiness::AlwaysTrue
                     } else {
                         analyze_single_pattern_predicate_kind(
                             db,
+                            python_file,
                             p,
                             narrowed_subject_ty,
                             Some(definitely_matched),
@@ -1161,7 +1179,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
                     };
 
                     remaining_subject_ty =
-                        pattern_binding_fallthrough_type(db, p, narrowed_subject_ty);
+                        pattern_binding_fallthrough_type(db, python_file, p, narrowed_subject_ty);
                     truthiness
                 })
                 // this is just a "max", but with a slight optimization:
@@ -1189,7 +1207,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
                     _ => return Truthiness::Ambiguous,
                 };
             let definitely_matched = precomputed_definite_match_ty.unwrap_or_else(|| {
-                definite_match_pattern_type_for_subject(db, predicate_kind, subject_ty)
+                definite_match_pattern_type_for_subject(db, python_file, predicate_kind, subject_ty)
             });
 
             if subject_ty.is_equivalent_to(db, definitely_matched)
@@ -1203,7 +1221,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
             }
         }
         PatternPredicateKind::Mapping(kind) => {
-            let mapping_ty = mapping_pattern_type(db);
+            let mapping_ty = mapping_pattern_type(db, python_file);
             if subject_ty.is_subtype_of(db, mapping_ty) {
                 if kind.is_irrefutable() {
                     Truthiness::AlwaysTrue
@@ -1217,7 +1235,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
             }
         }
         PatternPredicateKind::Sequence(kind) => {
-            let sequence_ty = sequence_pattern_type_builder(db).build();
+            let sequence_ty = sequence_pattern_type_builder(db, python_file).build();
             if subject_ty.is_subtype_of(db, sequence_ty) {
                 if kind.is_irrefutable() {
                     Truthiness::AlwaysTrue
@@ -1235,6 +1253,7 @@ fn analyze_single_pattern_predicate_kind<'db>(
             .map(|p| {
                 analyze_single_pattern_predicate_kind(
                     db,
+                    python_file,
                     p,
                     subject_ty,
                     precomputed_definite_match_ty,

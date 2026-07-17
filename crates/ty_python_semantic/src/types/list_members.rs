@@ -221,11 +221,23 @@ impl<'db> AllMembers<'db> {
             }
 
             Type::ClassLiteral(class_literal) if class_literal.is_typed_dict(db) => {
-                self.extend_with_type(db, KnownClass::TypedDictFallback.to_class_literal(db));
+                self.extend_with_type(
+                    db,
+                    KnownClass::TypedDictFallback.to_class_literal_with_version(
+                        db,
+                        class_literal.python_file(db).python_version(db),
+                    ),
+                );
             }
 
             Type::GenericAlias(generic_alias) if generic_alias.is_typed_dict(db) => {
-                self.extend_with_type(db, KnownClass::TypedDictFallback.to_class_literal(db));
+                self.extend_with_type(
+                    db,
+                    KnownClass::TypedDictFallback.to_class_literal_with_version(
+                        db,
+                        generic_alias.origin(db).python_file(db).python_version(db),
+                    ),
+                );
             }
 
             Type::SubclassOf(subclass_of_type) if subclass_of_type.is_typed_dict(db) => {
@@ -586,10 +598,18 @@ impl<'db> AllMembers<'db> {
     ) {
         match CodeGeneratorKind::from_class(db, class_literal) {
             Some(CodeGeneratorKind::NamedTuple) => {
+                let python_version = class_literal.python_file(db).python_version(db);
                 if ty.is_nominal_instance() {
-                    self.extend_with_type(db, KnownClass::NamedTupleFallback.to_instance(db));
+                    self.extend_with_type(
+                        db,
+                        KnownClass::NamedTupleFallback.to_instance_with_version(db, python_version),
+                    );
                 } else {
-                    self.extend_with_type(db, KnownClass::NamedTupleFallback.to_class_literal(db));
+                    self.extend_with_type(
+                        db,
+                        KnownClass::NamedTupleFallback
+                            .to_class_literal_with_version(db, python_version),
+                    );
                 }
             }
             Some(CodeGeneratorKind::TypedDict) => {}

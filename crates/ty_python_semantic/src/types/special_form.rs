@@ -882,7 +882,7 @@ impl SpecialFormType {
                 }
 
                 let is_in_metaclass = KnownClass::Type
-                    .to_class_literal(db)
+                    .to_class_literal_with_version(db, class.python_file(db).python_version(db))
                     .to_class_type(db)
                     .is_some_and(|type_class| {
                         class

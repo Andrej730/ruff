@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use compact_str::ToCompactString;
+use ruff_db::PythonFile;
 use ruff_python_ast as ast;
 use std::borrow::Cow;
 use ty_python_core::EvaluationMode;
@@ -597,6 +598,7 @@ impl<'db> IterationError<'db> {
         /// based on the variant of iteration error.
         struct Reporter<'a> {
             db: &'a dyn Db,
+            python_file: PythonFile<'a>,
             builder: LintDiagnosticGuardBuilder<'a, 'a>,
             iterable_type: Type<'a>,
             mode: EvaluationMode,
@@ -620,10 +622,13 @@ impl<'db> IterationError<'db> {
                 diag.info(because);
 
                 if let ErrorContext::Enabled = error_context {
+                    let python_version = self.python_file.python_version(self.db);
                     let target = if self.mode.is_async() {
-                        KnownClass::TyExtensionsAsyncIterable.to_instance_unknown(self.db)
+                        KnownClass::TyExtensionsAsyncIterable
+                            .to_instance_unknown(self.db, python_version)
                     } else {
-                        KnownClass::TyExtensionsIterable.to_instance_unknown(self.db)
+                        KnownClass::TyExtensionsIterable
+                            .to_instance_unknown(self.db, python_version)
                     };
                     self.iterable_type
                         .assignability_error_context(self.db, target)
@@ -649,10 +654,13 @@ impl<'db> IterationError<'db> {
                 diag.info(because);
 
                 if let ErrorContext::Enabled = error_context {
+                    let python_version = self.python_file.python_version(self.db);
                     let target = if self.mode.is_async() {
-                        KnownClass::TyExtensionsAsyncIterable.to_instance_unknown(self.db)
+                        KnownClass::TyExtensionsAsyncIterable
+                            .to_instance_unknown(self.db, python_version)
                     } else {
-                        KnownClass::TyExtensionsIterable.to_instance_unknown(self.db)
+                        KnownClass::TyExtensionsIterable
+                            .to_instance_unknown(self.db, python_version)
                     };
                     self.iterable_type
                         .assignability_error_context(self.db, target)
@@ -670,6 +678,7 @@ impl<'db> IterationError<'db> {
         let mode = self.mode();
         let reporter = Reporter {
             db,
+            python_file: context.python_file(),
             builder,
             iterable_type,
             mode,

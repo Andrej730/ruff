@@ -211,7 +211,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 };
 
                 if !inferred_return
-                    .to_instance_unknown_with_version(db, self.python_version())
+                    .to_instance_unknown(db, self.python_version())
                     .is_assignable_to(db, expected_ty)
                 {
                     report_invalid_generator_function_return_type(

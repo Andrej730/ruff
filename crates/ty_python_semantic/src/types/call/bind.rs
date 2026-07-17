@@ -1493,41 +1493,35 @@ impl<'db> Bindings<'db> {
                                 Some(Type::PropertyInstance(property)),
                                 Some(Type::KnownInstance(KnownInstanceType::TypeVar(typevar))),
                                 ..,
-                            ] => {
-                                match property
-                                    .getter(db)
-                                    .and_then(Type::as_function_literal)
-                                    .map(|f| f.name(db).as_str())
-                                {
-                                    Some("__name__") => {
-                                        overload.set_return_type(Type::string_literal(
-                                            db,
-                                            typevar.name(db),
-                                        ));
-                                    }
-                                    Some("__bound__") => {
-                                        overload.set_return_type(
-                                            typevar
-                                                .upper_bound(db)
-                                                .unwrap_or_else(|| Type::none(db)),
-                                        );
-                                    }
-                                    Some("__constraints__") => {
-                                        overload.set_return_type(Type::heterogeneous_tuple(
-                                            db,
-                                            typevar.constraints(db).into_iter().flatten(),
-                                        ));
-                                    }
-                                    Some("__default__") => {
-                                        overload.set_return_type(
-                                            typevar.default_type(db).unwrap_or_else(|| {
-                                                KnownClass::NoDefaultType.to_instance(db)
-                                            }),
-                                        );
-                                    }
-                                    _ => {}
+                            ] => match property.getter(db).and_then(Type::as_function_literal) {
+                                Some(getter) if getter.name(db) == "__name__" => {
+                                    overload.set_return_type(Type::string_literal(
+                                        db,
+                                        typevar.name(db),
+                                    ));
                                 }
-                            }
+                                Some(getter) if getter.name(db) == "__bound__" => {
+                                    overload.set_return_type(
+                                        typevar.upper_bound(db).unwrap_or_else(|| Type::none(db)),
+                                    );
+                                }
+                                Some(getter) if getter.name(db) == "__constraints__" => {
+                                    overload.set_return_type(Type::heterogeneous_tuple(
+                                        db,
+                                        typevar.constraints(db).into_iter().flatten(),
+                                    ));
+                                }
+                                Some(getter) if getter.name(db) == "__default__" => {
+                                    let python_version = getter.python_file(db).python_version(db);
+                                    overload.set_return_type(
+                                        typevar.default_type(db).unwrap_or_else(|| {
+                                            KnownClass::NoDefaultType
+                                                .to_instance_with_version(db, python_version)
+                                        }),
+                                    );
+                                }
+                                _ => {}
+                            },
                             [Some(Type::PropertyInstance(property)), Some(instance), ..] => {
                                 if let Some(getter) = property.getter(db) {
                                     if let Ok(return_ty) = getter
@@ -1810,8 +1804,14 @@ impl<'db> Bindings<'db> {
                         if let Some(enum_instance) =
                             bound_method.self_instance(db).to_instance_approximation(db)
                         {
+                            let python_version =
+                                bound_method.function(db).python_file(db).python_version(db);
                             overload.set_return_type(
-                                KnownClass::Iterator.to_specialized_instance(db, &[enum_instance]),
+                                KnownClass::Iterator.to_specialized_instance_with_version(
+                                    db,
+                                    python_version,
+                                    &[enum_instance],
+                                ),
                             );
                         }
                     }
@@ -2298,9 +2298,13 @@ impl<'db> Bindings<'db> {
                                         .members(db)
                                         .map(|member| Type::string_literal(db, member.name()));
                                     let specialization = UnionType::from_elements(db, member_names);
+                                    let python_version = class.python_file(db).python_version(db);
                                     overload.set_return_type(
-                                        KnownClass::FrozenSet
-                                            .to_specialized_instance(db, &[specialization]),
+                                        KnownClass::FrozenSet.to_specialized_instance_with_version(
+                                            db,
+                                            python_version,
+                                            &[specialization],
+                                        ),
                                     );
                                 }
                             }
@@ -2891,9 +2895,11 @@ impl<'db> Bindings<'db> {
                         }
 
                         Some(KnownClass::FunctoolsPartial) => {
-                            if let Some(new_return_type) =
-                                overload.functools_partial_return_type(db, call_arguments)
-                            {
+                            if let Some(new_return_type) = overload.functools_partial_return_type(
+                                db,
+                                class.python_file(db).python_version(db),
+                                call_arguments,
+                            ) {
                                 overload.set_return_type(new_return_type);
                             }
                         }
@@ -6665,6 +6671,7 @@ impl<'db> Binding<'db> {
     fn functools_partial_return_type<'a>(
         &mut self,
         db: &'db dyn Db,
+        python_version: PythonVersion,
         call_arguments: &CallArguments<'a, 'db>,
     ) -> Option<Type<'db>> {
         // `partial(...)` receives the wrapped callable as its first explicit argument (after
@@ -6674,8 +6681,8 @@ impl<'db> Binding<'db> {
             _ => return None,
         };
         let imprecise_return_type = self.return_ty;
-        let failed_synthesis_return_type =
-            KnownClass::FunctoolsPartial.to_specialized_instance(db, &[Type::unknown()]);
+        let failed_synthesis_return_type = KnownClass::FunctoolsPartial
+            .to_specialized_instance_with_version(db, python_version, &[Type::unknown()]);
 
         let (bound_call_arguments, partial_bindings, can_synthesize_signature) =
             Bindings::functools_partial_matched_bindings(db, func_ty, call_arguments)?;
@@ -8248,16 +8255,30 @@ fn parse_struct_format<'db>(
         // Map specifier to (type, repeat_count). For 's'/'p', count is byte length, not repetition.
         let (ty, repeat) = match specifier {
             'x' => continue, // Pad byte: no value produced
-            's' | 'p' => (KnownClass::Bytes.to_instance(db), 1),
-            'c' => (KnownClass::Bytes.to_instance(db), count),
-            'b' | 'B' | 'h' | 'H' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'n' | 'N' | 'P' => {
-                (KnownClass::Int.to_instance(db), count)
-            }
-            '?' => (KnownClass::Bool.to_instance(db), count),
-            'e' | 'f' | 'd' => (KnownClass::Float.to_instance(db), count),
-            'F' | 'D' if python_version >= PythonVersion::PY314 => {
-                (KnownClass::Complex.to_instance(db), count)
-            }
+            's' | 'p' => (
+                KnownClass::Bytes.to_instance_with_version(db, python_version),
+                1,
+            ),
+            'c' => (
+                KnownClass::Bytes.to_instance_with_version(db, python_version),
+                count,
+            ),
+            'b' | 'B' | 'h' | 'H' | 'i' | 'I' | 'l' | 'L' | 'q' | 'Q' | 'n' | 'N' | 'P' => (
+                KnownClass::Int.to_instance_with_version(db, python_version),
+                count,
+            ),
+            '?' => (
+                KnownClass::Bool.to_instance_with_version(db, python_version),
+                count,
+            ),
+            'e' | 'f' | 'd' => (
+                KnownClass::Float.to_instance_with_version(db, python_version),
+                count,
+            ),
+            'F' | 'D' if python_version >= PythonVersion::PY314 => (
+                KnownClass::Complex.to_instance_with_version(db, python_version),
+                count,
+            ),
             _ => return None,
         };
 

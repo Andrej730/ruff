@@ -2659,7 +2659,10 @@ fn validate_merged_dict_literal<'db, 'ast>(
         if let Some(key_expr) = &item.key {
             let key_ty = expression_type_fn(key_expr, TypeContext::default());
             let Some(key_literal) = key_ty.as_string_literal() else {
-                if key_ty.is_assignable_to(db, KnownClass::Str.to_instance(db)) {
+                if key_ty.is_assignable_to(
+                    db,
+                    KnownClass::Str.to_instance_with_version(db, context.python_version()),
+                ) {
                     if let Some(expected_ty) =
                         typed_dict.arbitrary_key_initialization_type_excluding(db, shadowed_keys)
                     {
@@ -2820,7 +2823,10 @@ fn validate_merged_unpacked_keyword_argument<'db, 'ast>(
 
         return unpacked_valid;
     } else if let Some((key_ty, value_ty)) = unpacked_type.unpack_keys_and_items(db) {
-        if !key_ty.is_assignable_to(db, KnownClass::Str.to_instance(db)) {
+        if !key_ty.is_assignable_to(
+            db,
+            KnownClass::Str.to_instance_with_version(db, context.python_version()),
+        ) {
             if let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, nodes.value) {
                 builder.into_diagnostic(format_args!(
                     "Unpacked argument has key type `{}` that is not assignable to `str`",

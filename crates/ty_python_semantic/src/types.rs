@@ -5036,6 +5036,7 @@ impl<'db> Type<'db> {
         // any can be removed: https://github.com/astral-sh/ty/issues/2715
         match class.known(db)? {
             KnownClass::Bool => {
+                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class bool(int):
                 //     def __new__(cls, o: object = ..., /) -> Self: ...
@@ -5049,7 +5050,7 @@ impl<'db> Type<'db> {
                             ))
                             .with_annotated_type(Type::any())
                             .with_default_type(Type::bool_literal(false))]),
-                            KnownClass::Bool.to_instance(db),
+                            KnownClass::Bool.to_instance_with_version(db, python_version),
                         ),
                     )
                     .into(),
@@ -5069,6 +5070,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Super => {
+                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class super:
                 //     @overload
@@ -5089,16 +5091,19 @@ impl<'db> Type<'db> {
                                     Parameter::positional_only(Some(Name::new_static("obj")))
                                         .with_annotated_type(Type::any()),
                                 ]),
-                                KnownClass::Super.to_instance(db),
+                                KnownClass::Super.to_instance_with_version(db, python_version),
                             ),
                             Signature::new(
                                 Parameters::standard([Parameter::positional_only(Some(
                                     Name::new_static("t"),
                                 ))
                                 .with_annotated_type(Type::any())]),
-                                KnownClass::Super.to_instance(db),
+                                KnownClass::Super.to_instance_with_version(db, python_version),
                             ),
-                            Signature::new(Parameters::empty(), KnownClass::Super.to_instance(db)),
+                            Signature::new(
+                                Parameters::empty(),
+                                KnownClass::Super.to_instance_with_version(db, python_version),
+                            ),
                         ],
                     )
                     .into(),
@@ -5106,6 +5111,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Deprecated => {
+                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class deprecated:
                 //     def __new__(
@@ -5117,7 +5123,8 @@ impl<'db> Type<'db> {
                 //         stacklevel: int = 1
                 //     ) -> Self: ...
                 // ```
-                let warning_class_type = KnownClass::Warning.to_subclass_of(db);
+                let warning_class_type =
+                    KnownClass::Warning.to_subclass_of_with_version(db, python_version);
 
                 Some(
                     Binding::single(
@@ -5130,14 +5137,18 @@ impl<'db> Type<'db> {
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         warning_class_type,
-                                        Type::none(db),
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
                                     ))
                                     .with_default_type(warning_class_type),
                                 Parameter::keyword_only(Name::new_static("stacklevel"))
-                                    .with_annotated_type(KnownClass::Int.to_instance(db))
+                                    .with_annotated_type(
+                                        KnownClass::Int
+                                            .to_instance_with_version(db, python_version),
+                                    )
                                     .with_default_type(Type::int_literal(1)),
                             ]),
-                            KnownClass::Deprecated.to_instance(db),
+                            KnownClass::Deprecated.to_instance_with_version(db, python_version),
                         ),
                     )
                     .into(),
@@ -5145,6 +5156,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::TypeAliasType => {
+                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // def __new__(
                 //     cls,
@@ -5160,7 +5172,10 @@ impl<'db> Type<'db> {
                         Signature::new(
                             Parameters::standard([
                                 Parameter::positional_or_keyword(Name::new_static("name"))
-                                    .with_annotated_type(KnownClass::Str.to_instance(db)),
+                                    .with_annotated_type(
+                                        KnownClass::Str
+                                            .to_instance_with_version(db, python_version),
+                                    ),
                                 Parameter::positional_or_keyword(Name::new_static("value"))
                                     .with_annotated_type(object_type_form(db)),
                                 Parameter::keyword_only(Name::new_static("type_params"))
@@ -5169,9 +5184,12 @@ impl<'db> Type<'db> {
                                         UnionType::from_elements(
                                             db,
                                             [
-                                                KnownClass::TypeVar.to_instance(db),
-                                                KnownClass::ParamSpec.to_instance(db),
-                                                KnownClass::TypeVarTuple.to_instance(db),
+                                                KnownClass::TypeVar
+                                                    .to_instance_with_version(db, python_version),
+                                                KnownClass::ParamSpec
+                                                    .to_instance_with_version(db, python_version),
+                                                KnownClass::TypeVarTuple
+                                                    .to_instance_with_version(db, python_version),
                                             ],
                                         ),
                                     ))
@@ -5185,6 +5203,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Property => {
+                let python_version = class.python_file(db).python_version(db);
                 let getter_signature = Signature::new(
                     Parameters::standard([
                         Parameter::positional_only(None).with_annotated_type(Type::any())
@@ -5196,7 +5215,7 @@ impl<'db> Type<'db> {
                         Parameter::positional_only(None).with_annotated_type(Type::any()),
                         Parameter::positional_only(None).with_annotated_type(Type::any()),
                     ]),
-                    Type::none(db),
+                    KnownClass::NoneType.to_instance_with_version(db, python_version),
                 );
                 let deleter_signature = Signature::new(
                     Parameters::standard([
@@ -5214,30 +5233,47 @@ impl<'db> Type<'db> {
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, getter_signature),
-                                        Type::none(db),
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
                                     ))
-                                    .with_default_type(Type::none(db)),
+                                    .with_default_type(
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
+                                    ),
                                 Parameter::positional_or_keyword(Name::new_static("fset"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, setter_signature),
-                                        Type::none(db),
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
                                     ))
-                                    .with_default_type(Type::none(db)),
+                                    .with_default_type(
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
+                                    ),
                                 Parameter::positional_or_keyword(Name::new_static("fdel"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
                                         Type::single_callable(db, deleter_signature),
-                                        Type::none(db),
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
                                     ))
-                                    .with_default_type(Type::none(db)),
+                                    .with_default_type(
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
+                                    ),
                                 Parameter::positional_or_keyword(Name::new_static("doc"))
                                     .with_annotated_type(UnionType::from_two_elements(
                                         db,
-                                        KnownClass::Str.to_instance(db),
-                                        Type::none(db),
+                                        KnownClass::Str
+                                            .to_instance_with_version(db, python_version),
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
                                     ))
-                                    .with_default_type(Type::none(db)),
+                                    .with_default_type(
+                                        KnownClass::NoneType
+                                            .to_instance_with_version(db, python_version),
+                                    ),
                             ]),
                             Type::unknown(),
                         ),
@@ -5247,6 +5283,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::FunctoolsPartial => {
+                let python_version = class.python_file(db).python_version(db);
                 // ```py
                 // class partial(Generic[_T]):
                 //     def __new__(cls, func: Callable[..., _T], /, *args: Any, **kwargs: Any) -> Self: ...
@@ -5276,8 +5313,11 @@ impl<'db> Type<'db> {
                                 ],
                                 ConcatenateTail::Gradual,
                             ),
-                            KnownClass::FunctoolsPartial
-                                .to_specialized_instance(db, &[Type::TypeVar(return_ty)]),
+                            KnownClass::FunctoolsPartial.to_specialized_instance_with_version(
+                                db,
+                                python_version,
+                                &[Type::TypeVar(return_ty)],
+                            ),
                         ),
                     )
                     .into(),
@@ -5285,6 +5325,7 @@ impl<'db> Type<'db> {
             }
 
             KnownClass::Tuple => {
+                let python_version = class.python_file(db).python_version(db);
                 let element_ty = BoundTypeVarInstance::synthetic(
                     db,
                     Name::new_static("T"),
@@ -5309,8 +5350,11 @@ impl<'db> Type<'db> {
                                     Name::new_static("iterable"),
                                 ))
                                 .with_annotated_type(
-                                    KnownClass::Iterable
-                                        .to_specialized_instance(db, &[Type::TypeVar(element_ty)]),
+                                    KnownClass::Iterable.to_specialized_instance_with_version(
+                                        db,
+                                        python_version,
+                                        &[Type::TypeVar(element_ty)],
+                                    ),
                                 )]),
                                 Type::homogeneous_tuple(db, Type::TypeVar(element_ty)),
                             ),

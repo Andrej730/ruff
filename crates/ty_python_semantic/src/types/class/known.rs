@@ -1056,12 +1056,7 @@ impl KnownClass {
     /// Similar to [`KnownClass::to_instance`], but returns the Unknown-specialization where each type
     /// parameter is specialized to `Unknown`.
     #[track_caller]
-    pub(crate) fn to_instance_unknown(self, db: &dyn Db) -> Type<'_> {
-        self.to_instance_unknown_with_version(db, Program::get(db).python_version(db))
-    }
-
-    #[track_caller]
-    pub(crate) fn to_instance_unknown_with_version(
+    pub(crate) fn to_instance_unknown(
         self,
         db: &dyn Db,
         python_version: PythonVersion,
@@ -1198,13 +1193,6 @@ impl KnownClass {
     fn lookup_class_literal(
         self,
         db: &dyn Db,
-    ) -> Result<Option<StaticClassLiteral<'_>>, KnownClassLookupError<'_>> {
-        self.lookup_class_literal_with_version(db, Program::get(db).python_version(db))
-    }
-
-    fn lookup_class_literal_with_version(
-        self,
-        db: &dyn Db,
         python_version: PythonVersion,
     ) -> Result<Option<StaticClassLiteral<'_>>, KnownClassLookupError<'_>> {
         #[salsa::tracked(returns(copy), cycle_initial=|_, _, _| Ok(None), heap_size=ruff_memory_usage::heap_size)]
@@ -1274,7 +1262,7 @@ impl KnownClass {
         db: &dyn Db,
         python_version: PythonVersion,
     ) -> Option<StaticClassLiteral<'_>> {
-        match self.lookup_class_literal_with_version(db, python_version) {
+        match self.lookup_class_literal(db, python_version) {
             Ok(class_literal) => class_literal,
             Err(KnownClassLookupError::ClassPossiblyUnbound { class_literal, .. }) => {
                 Some(class_literal)
@@ -1323,7 +1311,7 @@ impl KnownClass {
             .unwrap_or_else(SubclassOfType::subclass_of_unknown)
     }
 
-    pub(crate) fn to_specialized_subclass_of_with_version<'db>(
+    pub(crate) fn to_specialized_subclass_of<'db>(
         self,
         db: &'db dyn Db,
         python_version: PythonVersion,
@@ -1337,7 +1325,8 @@ impl KnownClass {
     /// Return `true` if this symbol can be resolved to a class definition `class` in its canonical
     /// module, *and* `class` is a subclass of `other`.
     pub(crate) fn is_subclass_of<'db>(self, db: &'db dyn Db, other: ClassType<'db>) -> bool {
-        self.lookup_class_literal(db)
+        let python_version = other.class_literal(db).python_file(db).python_version(db);
+        self.lookup_class_literal(db, python_version)
             .is_ok_and(|class| class.is_some_and(|class| class.is_subclass_of(db, None, other)))
     }
 

@@ -97,11 +97,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 KnownClass::Str.to_instance_with_version(db, python_version),
                 Type::object(),
             ];
-            let str_object_map = KnownClass::Mapping.to_specialized_subclass_of_with_version(
-                db,
-                python_version,
-                spec,
-            );
+            let str_object_map =
+                KnownClass::Mapping.to_specialized_subclass_of(db, python_version, spec);
             IntersectionType::from_two_elements(db, str_object_map, Type::unknown())
         };
 
