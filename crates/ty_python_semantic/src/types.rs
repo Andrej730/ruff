@@ -7907,7 +7907,7 @@ impl<'db> SelfBinding<'db> {
 /// since we sometimes have to apply type mappings lazily (e.g., to the signature of a function
 /// literal).
 #[derive(Clone, Debug, Eq, PartialEq, get_size2::GetSize)]
-pub enum TypeMapping<'a, 'db> {
+pub(crate) enum TypeMapping<'a, 'db> {
     /// Applies a specialization to the type
     ApplySpecialization(ApplySpecialization<'a, 'db>),
     /// Applies a specialization and materializes only substituted typevars.

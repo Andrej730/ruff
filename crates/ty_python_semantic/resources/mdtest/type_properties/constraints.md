@@ -97,26 +97,26 @@ def _[T]() -> None:
     ConstraintSet.range(Base, T, Base)
 ```
 
-Gradual lower and upper bounds are transformed into their bottom and top materializations,
-respectively.
+Gradual lower and upper bounds remain distinct from their bottom and top materializations so that
+they can contribute to inference.
 
 ```py
 def _[T]() -> None:
     constraints = ConstraintSet.range(Base, T, Any)
     expected = ConstraintSet.range(Base, T, object)
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ConstraintSet.range(Sequence[Base], T, Sequence[Any])
     expected = ConstraintSet.range(Sequence[Base], T, Sequence[object])
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ConstraintSet.range(Any, T, Base)
     expected = ConstraintSet.range(Never, T, Base)
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ConstraintSet.range(Sequence[Any], T, Sequence[Base])
     expected = ConstraintSet.range(Sequence[Never], T, Sequence[Base])
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 ```
 
 ### Negated range
@@ -187,26 +187,26 @@ def _[T]() -> None:
     ~ConstraintSet.range(Base, T, Base)
 ```
 
-Gradual lower and upper bounds are transformed into their bottom and top materializations,
-respectively.
+Gradual lower and upper bounds remain distinct from their bottom and top materializations so that
+they can contribute to inference.
 
 ```pyi
 def _[T]() -> None:
     constraints = ~ConstraintSet.range(Base, T, Any)
     expected = ~ConstraintSet.range(Base, T, object)
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ~ConstraintSet.range(Sequence[Base], T, Sequence[Any])
     expected = ~ConstraintSet.range(Sequence[Base], T, Sequence[object])
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ~ConstraintSet.range(Any, T, Base)
     expected = ~ConstraintSet.range(Never, T, Base)
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 
     constraints = ~ConstraintSet.range(Sequence[Any], T, Sequence[Base])
     expected = ~ConstraintSet.range(Sequence[Never], T, Sequence[Base])
-    static_assert(constraints == expected)
+    static_assert(constraints != expected)
 ```
 
 A negated _type_ is not the same thing as a negated _range_.
@@ -957,7 +957,7 @@ Constraint implication uses subtyping rather than assignability. Types that are 
 through dynamic bases cannot establish an implication between ranges.
 
 ```py
-from typing import Any
+from typing import Any, Never
 from ty_extensions import static_assert
 from ty_extensions._internal import ConstraintSet
 
@@ -969,6 +969,34 @@ def _[T]() -> None:
     b = ConstraintSet.range(B, T, B)
     static_assert(not a.satisfies(b))
     static_assert(not b.satisfies(a))
+
+def gradual_bounds_are_not_materialized[T]() -> None:
+    gradual_lower = ConstraintSet.range(Any, T, object)
+    int_lower = ConstraintSet.range(int, T, object)
+    object_lower = ConstraintSet.range(object, T, object)
+    static_assert(not int_lower.satisfies(gradual_lower))
+    static_assert(not gradual_lower.satisfies(int_lower))
+    static_assert(object_lower.satisfies(gradual_lower))
+    static_assert((gradual_lower | object_lower) == gradual_lower)
+
+    gradual_upper = ConstraintSet.range(Never, T, Any)
+    int_upper = ConstraintSet.range(Never, T, int)
+    static_assert(not int_upper.satisfies(gradual_upper))
+    static_assert(not gradual_upper.satisfies(int_upper))
+```
+
+Range implication compares gradual bounds directly because they are inference evidence. Transitive
+composition is deliberately stricter: two gradual occurrences may materialize independently, so they
+cannot establish a subtype relation through a type variable.
+
+```py
+from typing import Any, Never
+from ty_extensions import static_assert
+from ty_extensions._internal import ConstraintSet
+
+def independent_gradual_pivots[T, U]() -> None:
+    constraints = ConstraintSet.range(Never, T, Any) & ConstraintSet.range(Any, U, object)
+    static_assert(not constraints.implies_subtype_of(T, U))
 ```
 
 ## Displaying constraints

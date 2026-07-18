@@ -276,6 +276,13 @@ impl<'db> OwnedConstraintSet<'db> {
         }
     }
 
+    pub(crate) fn gradual() -> Self {
+        Self {
+            node: GRADUAL,
+            inner: None,
+        }
+    }
+
     /// Returns `true` if this constraint set's root is the `always` terminal.
     ///
     /// This is only a cheap sufficient check. A nonterminal constraint set can also be always
@@ -2007,18 +2014,17 @@ impl ConstraintId {
             return false;
         }
 
-        let lower =
-            |bounds: ConstraintBounds<'db>| bounds.materialized_lower().bottom_materialization(db);
-        let upper =
-            |bounds: ConstraintBounds<'db>| bounds.materialized_upper().top_materialization(db);
+        // Implication proves range containment and must therefore use subtyping. Assignability
+        // only establishes gradual compatibility and is not transitive, so it cannot justify
+        // removing a constraint as redundant.
         builder.cached_is_constraint_set_subtype_of(
             db,
-            lower(other_constraint.bounds),
-            lower(self_constraint.bounds),
+            other_constraint.bounds.materialized_lower(),
+            self_constraint.bounds.materialized_lower(),
         ) && builder.cached_is_constraint_set_subtype_of(
             db,
-            upper(self_constraint.bounds),
-            upper(other_constraint.bounds),
+            self_constraint.bounds.materialized_upper(),
+            other_constraint.bounds.materialized_upper(),
         )
     }
 
@@ -2700,11 +2706,6 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
-            // Preserve a lone gradual result when folding from the disjunction identity.
-            (Node::AlwaysFalse, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::AlwaysFalse) => self,
-            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::Gradual) => self,
             (Node::AlwaysTrue, Node::AlwaysTrue) => ALWAYS_TRUE,
             (Node::AlwaysTrue, Node::Interior(_)) => {
                 let other_interior = builder.interior_node_data(other);
@@ -2732,6 +2733,10 @@ impl NodeId {
                     self_interior.source_order,
                 )
             }
+            (Node::AlwaysFalse, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::AlwaysFalse) => self,
+            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::Gradual) => self,
             (Node::Interior(self_interior), Node::Interior(other_interior)) => {
                 self_interior.or(builder, other_interior, other_offset)
             }
@@ -2869,11 +2874,6 @@ impl NodeId {
         other_offset: usize,
     ) -> Self {
         match (self.node(), other.node()) {
-            // Preserve a lone gradual result when folding from the conjunction identity.
-            (Node::AlwaysTrue, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::AlwaysTrue) => self,
-            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
-            (_, Node::Gradual) => self,
             (Node::AlwaysFalse, Node::AlwaysFalse) => ALWAYS_FALSE,
             (Node::AlwaysFalse, Node::Interior(_)) => {
                 let other_interior = builder.interior_node_data(other);
@@ -2895,6 +2895,10 @@ impl NodeId {
                     self_interior.source_order,
                 )
             }
+            (Node::AlwaysTrue, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::AlwaysTrue) => self,
+            (Node::Gradual, _) => other.with_adjusted_source_order(builder, other_offset),
+            (_, Node::Gradual) => self,
             (Node::Interior(self_interior), Node::Interior(other_interior)) => {
                 self_interior.and(builder, other_interior, other_offset)
             }

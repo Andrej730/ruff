@@ -1920,7 +1920,7 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
 /// You will usually use [`Specialization`] instead of this type. This type is used when we need to
 /// substitute types for type variables before we have fully constructed a [`Specialization`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, get_size2::GetSize)]
-pub enum ApplySpecialization<'a, 'db> {
+pub(crate) enum ApplySpecialization<'a, 'db> {
     Specialization(Specialization<'db>),
     TypeAlias(Specialization<'db>),
     Partial {
@@ -1932,10 +1932,6 @@ pub enum ApplySpecialization<'a, 'db> {
     },
     ReturnCallables(&'a FxIndexMap<BoundTypeVarInstance<'db>, BoundTypeVarInstance<'db>>),
     /// Maps every inferable type variable to the provided type.
-    #[expect(
-        private_interfaces,
-        reason = "this variant is only constructed through `Type::specialize_inferable`"
-    )]
     Inferable(InferableTypeVars<'db>, Type<'db>),
     /// Maps a single typevar to a concrete type. Used by the constraint set's sequent map to
     /// substitute a typevar nested inside another constraint's bound.
@@ -2748,7 +2744,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             (formal, gradual @ Type::Dynamic(dynamic))
                 if dynamic != DynamicType::UnspecializedTypeVar =>
             {
-                let when = gradual.has_relation_to_with_options(
+                let when = gradual.has_relation_to_with(
                     self.db,
                     formal,
                     self.constraints,
@@ -3336,7 +3332,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let when = self
                     .common_typed_dict_protocol_constraints(formal, actual_union)
                     .unwrap_or_else(|| {
-                        actual.has_relation_to_with_options(
+                        actual.has_relation_to_with(
                             self.db,
                             formal,
                             self.constraints,

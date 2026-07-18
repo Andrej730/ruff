@@ -422,9 +422,16 @@ impl<'db> Type<'db> {
 
     /// Return true if this type is a subtype of `target` using constraint-set typevar rules.
     pub(super) fn is_constraint_set_subtype_of(self, db: &'db dyn Db, target: Type<'db>) -> bool {
-        let constraints = ConstraintSetBuilder::new();
-        self.when_constraint_set_subtype_of(db, target, &constraints)
-            .is_always_satisfied(db)
+        #[salsa::tracked(returns(copy), cycle_initial=|_, _, _| true, heap_size=ruff_memory_usage::heap_size)]
+        fn is_constraint_set_subtype_of_impl<'db>(db: &'db dyn Db, types: TypePair<'db>) -> bool {
+            let constraints = ConstraintSetBuilder::new();
+            types
+                .first(db)
+                .when_constraint_set_subtype_of(db, types.second(db), &constraints)
+                .is_always_satisfied(db)
+        }
+
+        is_constraint_set_subtype_of_impl(db, TypePair::new(db, self, target))
     }
 
     pub(super) fn when_assignable_to<'c>(
@@ -441,6 +448,41 @@ impl<'db> Type<'db> {
             inferable,
             TypeRelation::Assignability,
         )
+    }
+
+    /// Returns whether constraint-set assignability is known without constructing the relation
+    /// checker.
+    fn is_trivially_constraint_set_assignable_to(
+        self,
+        db: &'db dyn Db,
+        target: Type<'db>,
+    ) -> Option<OwnedConstraintSet<'db>> {
+        if self.materialized_divergent_fallback().is_none() && self == target {
+            return Some(OwnedConstraintSet::always());
+        }
+
+        // Type variables must be converted into constraints before applying the remaining
+        // relation shortcuts.
+        if self.is_type_var() || target.is_type_var() {
+            return None;
+        }
+
+        match (self, target) {
+            (Type::Never, _) => Some(OwnedConstraintSet::always()),
+            (Type::Dynamic(_), _) | (_, Type::Dynamic(_)) => Some(OwnedConstraintSet::gradual()),
+            (_, Type::NominalInstance(target)) if target.is_object() => {
+                Some(OwnedConstraintSet::always())
+            }
+            (_, Type::Union(union)) => (self.materialized_divergent_fallback().is_none()
+                && union.elements(db).contains(&self))
+            .then(OwnedConstraintSet::always),
+            (Type::Intersection(intersection), _) => {
+                (target.materialized_divergent_fallback().is_none()
+                    && intersection.positive(db).contains(&target))
+                .then(OwnedConstraintSet::always)
+            }
+            _ => None,
+        }
     }
 
     /// Returns an _owned_ (i.e. salsa-cached) constraint set that describes when `self` is
@@ -469,7 +511,7 @@ impl<'db> Type<'db> {
                 let source = types.first(db);
                 let target = types.second(db);
 
-                source.has_relation_to_with_options(
+                source.has_relation_to_with(
                     db,
                     target,
                     constraints,
@@ -479,6 +521,10 @@ impl<'db> Type<'db> {
                     GradualEvaluation::Lazy,
                 )
             })
+        }
+
+        if let Some(result) = self.is_trivially_constraint_set_assignable_to(db, target) {
+            return Cow::Owned(result);
         }
 
         Cow::Borrowed(when_constraint_set_assignable_to_owned_impl(
@@ -495,7 +541,7 @@ impl<'db> Type<'db> {
         target: Type<'db>,
         constraints: &'c ConstraintSetBuilder<'db>,
     ) -> ConstraintSet<'db, 'c> {
-        self.has_relation_to_with_options(
+        self.has_relation_to_with(
             db,
             target,
             constraints,
@@ -512,13 +558,14 @@ impl<'db> Type<'db> {
         target: Type<'db>,
         constraints: &'c ConstraintSetBuilder<'db>,
     ) -> ConstraintSet<'db, 'c> {
-        self.has_relation_to_with_typevar_evaluation(
+        self.has_relation_to_with(
             db,
             target,
             constraints,
             InferableTypeVars::None,
             TypeRelation::Subtyping,
             TypeVarEvaluation::Lazy,
+            GradualEvaluation::Eager,
         )
     }
 
@@ -555,38 +602,19 @@ impl<'db> Type<'db> {
         inferable: InferableTypeVars<'db>,
         relation: TypeRelation,
     ) -> ConstraintSet<'db, 'c> {
-        self.has_relation_to_with_typevar_evaluation(
+        self.has_relation_to_with(
             db,
             target,
             constraints,
             inferable,
             relation,
             TypeVarEvaluation::Eager,
-        )
-    }
-
-    fn has_relation_to_with_typevar_evaluation<'c>(
-        self,
-        db: &'db dyn Db,
-        target: Type<'db>,
-        constraints: &'c ConstraintSetBuilder<'db>,
-        inferable: InferableTypeVars<'db>,
-        relation: TypeRelation,
-        typevar_evaluation: TypeVarEvaluation,
-    ) -> ConstraintSet<'db, 'c> {
-        self.has_relation_to_with_options(
-            db,
-            target,
-            constraints,
-            inferable,
-            relation,
-            typevar_evaluation,
             GradualEvaluation::Eager,
         )
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub(super) fn has_relation_to_with_options<'c>(
+    pub(super) fn has_relation_to_with<'c>(
         self,
         db: &'db dyn Db,
         target: Type<'db>,
@@ -1093,8 +1121,8 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 .implies_subtype_of(db, self.constraints, source, target);
         }
 
-        // Distribute gradual constraints only when both gradual and type-variable evaluation are
-        // lazy. Otherwise, resolve gradual assignability before handling type variables.
+        // Eager gradual assignability takes precedence over lazy type-variable evaluation.
+        // Subtyping instead records top- or bottom-materialized bounds for dynamic types.
         if self.relation.is_assignability()
             && !self.is_lazy_gradual_assignability()
             && (source.is_dynamic() || target.is_dynamic())
@@ -1733,13 +1761,8 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             // the target type.
             (gradual @ Type::Dynamic(_), _) => {
                 let source = target.specialize_inferable(db, self.inferable, gradual);
-
-                let constraints = self.check_type_pair(db, source, target);
-                if constraints.is_always_satisfied(db) {
-                    self.gradual()
-                } else {
-                    constraints
-                }
+                self.check_type_pair(db, source, target)
+                    .and(db, self.constraints, || self.gradual())
             }
 
             (Type::Intersection(intersection), _) => {
