@@ -15,14 +15,14 @@ uv run --locked --python 3.12 --only-group release \
     rooster release "$@"
 
 # Bump internal crate versions
-uv run --script "$project_root/scripts/bump-workspace-crate-versions.py"
+uv run "$project_root/scripts/bump-workspace-crate-versions.py"
 
 echo "Updating crate READMEs..."
-uv run --script "$project_root/scripts/generate-crate-readmes.py"
+uv run "$project_root/scripts/generate-crate-readmes.py"
 
 echo "Updating lockfiles..."
 cargo update -p ruff
 uv lock --no-config
 
 echo "Checking crates.io publish setup..."
-uv run --no-config --script "$project_root/scripts/setup-crates-io-publish.py" --quiet
+uv run --no-config "$project_root/scripts/setup-crates-io-publish.py" --quiet

@@ -15,7 +15,7 @@
 #
 # Usage:
 #
-#   CARGO_REGISTRY_TOKEN=<tok> uv run --script scripts/setup-crates-io-publish.py [--dry-run] [--force] [--quiet]
+#   CARGO_REGISTRY_TOKEN=<tok> uv run scripts/setup-crates-io-publish.py [--dry-run] [--force] [--quiet]
 
 # /// script
 # requires-python = ">=3.13"

@@ -184,7 +184,7 @@ crates.io as part of Ruff's releases:
 For a publishable crate, generate its README and verify that the workspace can still be packaged:
 
 ```shell
-uv run --script scripts/generate-crate-readmes.py
+uv run scripts/generate-crate-readmes.py
 cargo publish --workspace --dry-run
 ```
 
